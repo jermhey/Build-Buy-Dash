@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Build vs Buy App",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/build_buy_app/app.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/build_buy_app",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/build_buy_app"
+            }
+        }
+    ]
+}
