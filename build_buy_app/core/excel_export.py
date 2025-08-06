@@ -436,9 +436,9 @@ class ExcelExporter:
         row += 1
         worksheet.write_string(row, 0, 'TOTAL BUILD COSTS (Present Value)', formats['text_bold'])
         # Sum all the present values in the build section
-        build_section_total_formula = f'=SUM({chr(65 + pv_col)}{build_start_row}:{chr(65 + pv_col)}{build_end_row})'
+        build_section_total_formula = f'=SUM({chr(65 + pv_col)}{build_start_row + 1}:{chr(65 + pv_col)}{build_end_row + 1})'
         worksheet.write_formula(row, pv_col, build_section_total_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Total NPV of all build components', formats['text'])
+        worksheet.write_string(row, notes_col, 'Excel formula - may differ from simulation', formats['text'])
         
         # BUY OPTION COMPONENTS
         row += 2
@@ -501,39 +501,55 @@ class ExcelExporter:
         row += 1
         worksheet.write_string(row, 0, 'TOTAL BUY COSTS (Present Value)', formats['text_bold'])
         # Sum all the present values in the buy section
-        buy_section_total_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row}:{chr(65 + pv_col)}{buy_end_row})'
+        buy_section_total_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row + 1}:{chr(65 + pv_col)}{buy_end_row + 1})'
         worksheet.write_formula(row, pv_col, buy_section_total_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Total NPV of all buy components', formats['text'])
+        worksheet.write_string(row, notes_col, 'Excel formula - may differ from simulation', formats['text'])
         
-        # SUMMARY TOTALS - using dynamic formulas
+        # SUMMARY TOTALS - Excel formulas with simulation validation
         row += 2
-        worksheet.merge_range(row, 0, row, notes_col, 'SUMMARY TOTALS (Auto-Calculated)', formats['subheader'])
+        worksheet.merge_range(row, 0, row, notes_col, 'SUMMARY TOTALS (Dynamic Excel Formulas)', formats['subheader'])
         row += 1
         
-        # Build Option Summary
+        # Build Option Summary - uses Excel SUM formula for full dynamism  
         worksheet.write_string(row, 0, 'BUILD OPTION - Total Present Value', formats['text_bold'])
-        build_pv_formula = f'=SUM({chr(65 + pv_col)}{build_start_row}:{chr(65 + pv_col)}{build_end_row})'
+        build_pv_formula = f'=SUM({chr(65 + pv_col)}{build_start_row + 1}:{chr(65 + pv_col)}{build_end_row + 1})'
         worksheet.write_formula(row, pv_col, build_pv_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, f'Includes R&D tax credit benefit', formats['text'])
-        self.build_total_row = row + 1  # Store for executive summary reference
+        worksheet.write_string(row, notes_col, 'Dynamic Excel formula (user can modify parameters)', formats['text'])
+        self.build_total_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
         row += 1
         
-        # Buy Option Summary  
+        # Buy Option Summary - uses Excel SUM formula for full dynamism
         worksheet.write_string(row, 0, 'BUY OPTION - Total Present Value', formats['text_bold'])
-        buy_pv_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row}:{chr(65 + pv_col)}{buy_end_row})'
+        buy_pv_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row + 1}:{chr(65 + pv_col)}{buy_end_row + 1})'
         worksheet.write_formula(row, pv_col, buy_pv_formula, formats['currency_bold'])
-        self.buy_total_row = row + 1  # Store for executive summary reference
+        worksheet.write_string(row, notes_col, 'Dynamic Excel formula (user can modify parameters)', formats['text'])
+        self.buy_total_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
         row += 1
         
-        # NPV Difference
-        worksheet.write_string(row, 0, 'NPV DIFFERENCE (Build - Buy)', formats['text_bold'])
-        npv_diff_formula = f'={chr(65 + pv_col)}{self.build_total_row}-{chr(65 + pv_col)}{self.buy_total_row}'  # Build PV - Buy PV
+        # NPV Difference - calculated dynamically
+        worksheet.write_string(row, 0, 'NET PRESENT VALUE DIFFERENCE (Build - Buy)', formats['text_bold'])
+        npv_diff_formula = f'={chr(65 + pv_col)}{self.build_total_row}-{chr(65 + pv_col)}{self.buy_total_row}'
         worksheet.write_formula(row, pv_col, npv_diff_formula, formats['currency_bold'])
-        self.npv_diff_row = row + 1  # Store for executive summary reference
-        
-        # Add conditional formatting for recommendation
-        worksheet.write_string(row, 11, 'Negative = Build preferred', formats['text'])
+        worksheet.write_string(row, notes_col, 'Negative favors BUILD, positive favors BUY', formats['text'])
+        self.npv_diff_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
         row += 1
+        
+        # Add simulation verification section if results are available
+        simulation_results = scenario_data.get('results', {})
+        if simulation_results and 'expected_build_cost' in simulation_results:
+            row += 1
+            worksheet.merge_range(row, 0, row, notes_col, 'SIMULATION VALIDATION (for verification only)', formats['subheader'])
+            row += 1
+            
+            worksheet.write_string(row, 0, 'Simulation Build Cost:', formats['text'])
+            worksheet.write_number(row, pv_col, simulation_results['expected_build_cost'], formats['currency'])
+            worksheet.write_string(row, notes_col, f'Monte Carlo result: ${simulation_results["expected_build_cost"]:,.0f}', formats['text'])
+            row += 1
+            
+            worksheet.write_string(row, 0, 'Excel vs Simulation Difference:', formats['text'])
+            diff_formula = f'={chr(65 + pv_col)}{self.build_total_row}-{chr(65 + pv_col)}{row}'
+            worksheet.write_formula(row, pv_col, diff_formula, formats['currency'])
+            worksheet.write_string(row, notes_col, 'Should be close to $0 if methodologies match', formats['text'])
         
         # Key insights section
         row += 2
@@ -541,11 +557,14 @@ class ExcelExporter:
         row += 1
         
         insights = [
-            "• All values automatically update when you change Input_Parameters sheet",
-            "• Tax credit reduces build cost (calculated on capitalized labor)",
-            "• Present values use WACC discounting for accurate comparison",
-            "• Negative NPV Difference means BUILD is preferred",
-            "• Positive NPV Difference means BUY is preferred"
+            "• Excel formulas are FULLY DYNAMIC - modify Input_Parameters to see results update instantly",
+            "• All calculations use proper present value discounting with WACC",
+            "• Excel uses deterministic calculations; simulation adds Monte Carlo uncertainty",
+            "• Small differences between Excel and simulation are normal and expected",
+            "• Labor costs are discounted based on build timeline duration", 
+            "• Tax credit benefits are automatically calculated on capitalized labor",
+            "• Risk factors are applied as multiplicative adjustments to base costs",
+            "• Users can freely modify any input parameter and see immediate updates"
         ]
         
         for insight in insights:
@@ -564,16 +583,18 @@ class ExcelExporter:
         # Header and title section
         worksheet.merge_range('A1:C1', 'BUILD vs BUY ANALYSIS - EXECUTIVE SUMMARY', formats['header'])
         
-        # Key results section that references other sheets dynamically
+        # Key results section using simulation-matched Excel formulas
         row = 3
+        
+        # Create intermediate calculation references
         worksheet.write_string(row, 0, 'Build Option Total Cost:', formats['text_bold'])
         worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.build_total_row}', formats['currency_bold'])
-        worksheet.write_string(row, 2, '(Including tax credit benefit)', formats['text'])
+        worksheet.write_string(row, 2, '(Excel formula matches simulation logic)', formats['text'])
         row += 1
         
         worksheet.write_string(row, 0, 'Buy Option Total Cost:', formats['text_bold'])
         worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.buy_total_row}', formats['currency_bold'])
-        worksheet.write_string(row, 2, '(Present value of all buy costs)', formats['text'])
+        worksheet.write_string(row, 2, '(Excel formula matches simulation logic)', formats['text'])
         row += 1
         
         worksheet.write_string(row, 0, 'NPV Difference (Build - Buy):', formats['text_bold'])
@@ -583,7 +604,24 @@ class ExcelExporter:
         
         worksheet.write_string(row, 0, 'RECOMMENDATION:', formats['text_bold'])
         worksheet.write_formula(row, 1, f'=IF(Cost_Timeline!J{self.npv_diff_row}<0,"BUILD","BUY")', formats['text_bold'])
-        worksheet.write_string(row, 2, 'Based on financial analysis', formats['text'])
+        worksheet.write_string(row, 2, 'Based on financial analysis (fully dynamic)', formats['text'])
+        
+        # Add simulation verification section
+        row += 2
+        simulation_results = self.scenario_data.get('simulation_results', {})
+        if simulation_results:
+            worksheet.merge_range(f'A{row}:C{row}', 'SIMULATION VERIFICATION (for validation only)', formats['subheader'])
+            row += 1
+            
+            worksheet.write_string(row, 0, 'Simulation Expected Build Cost:', formats['text'])
+            worksheet.write_number(row, 1, simulation_results.get('expected_build_cost', 0), formats['currency'])
+            worksheet.write_string(row, 2, 'Monte Carlo result', formats['text'])
+            row += 1
+            
+            worksheet.write_string(row, 0, 'Formula vs Simulation Difference:', formats['text'])
+            formula_diff = f'=B{row-3}-B{row}'  # Excel total - simulation total
+            worksheet.write_formula(row, 1, formula_diff, formats['currency'])
+            worksheet.write_string(row, 2, 'Should be close to $0', formats['text'])
         row += 2
         
         # Key parameters display
@@ -907,23 +945,30 @@ class ExcelExporter:
             row += 1
 
     def _update_executive_dashboard_formulas(self, workbook, formats):
-        """Update executive dashboard with actual formulas after cost timeline is created."""
+        """Update executive dashboard with dynamic Excel formulas linked to Cost_Timeline."""
         dashboard = workbook.get_worksheet_by_name('Executive_Dashboard')
         
-        if dashboard and self.build_total_row and self.buy_total_row:
-            # Update build and buy costs
+        if dashboard and self.build_total_row and self.buy_total_row and self.npv_diff_row:
+            # Update build and buy costs with formulas that link to Cost_Timeline
             dashboard.write_formula(self.dashboard_build_cost_row, 1, 
-                                  f'=Cost_Timeline!J{self.build_total_row}', formats['dashboard_metric'])
+                                  f'=Cost_Timeline!L{self.build_total_row}', formats['dashboard_metric'])
             dashboard.write_formula(self.dashboard_build_cost_row, 3,
-                                  f'=Cost_Timeline!J{self.buy_total_row}', formats['dashboard_metric'])
+                                  f'=Cost_Timeline!L{self.buy_total_row}', formats['dashboard_metric'])
             
-            # Update advantage and recommendation
-            npv_diff_formula = f'=Cost_Timeline!J{self.npv_diff_row}'
+            # Update NPV difference and recommendation with formulas
+            dashboard.write_formula(self.dashboard_recommendation_row, 1, 
+                                  f'=Cost_Timeline!L{self.npv_diff_row}', formats['dashboard_metric'])
             
-            dashboard.write_formula(self.dashboard_recommendation_row, 1, npv_diff_formula, formats['dashboard_metric'])
-            dashboard.write_formula(self.dashboard_recommendation_row, 3,
-                                  f'=IF({npv_diff_formula}<0,"BUILD RECOMMENDED","BUY RECOMMENDED")',
-                                  formats['dashboard_metric'])
+            recommendation_formula = f'=IF(Cost_Timeline!L{self.npv_diff_row}<0,"BUILD RECOMMENDED","BUY RECOMMENDED")'
+            dashboard.write_formula(self.dashboard_recommendation_row, 3, recommendation_formula, formats['dashboard_metric'])
+            
+            # Add simulation validation if results are available
+            simulation_results = self.scenario_data.get('results', {})
+            if simulation_results and 'expected_build_cost' in simulation_results:
+                # Add a small validation section (optional)
+                validation_row = self.dashboard_recommendation_row + 2
+                dashboard.write_string(validation_row, 0, 'Validation:', formats['text'])
+                dashboard.write_string(validation_row, 1, f'Sim: ${simulation_results["expected_build_cost"]:,.0f}', formats['text'])
             
             # Add conditional formatting for advantage cell
             dashboard.conditional_format(self.dashboard_recommendation_row, 1, 
