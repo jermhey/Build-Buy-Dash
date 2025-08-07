@@ -64,14 +64,10 @@ class ExcelExporter:
                 # Create dynamic input parameters sheet FIRST for user configuration
                 self._create_input_parameters_sheet(workbook, formats, scenario_data)
                 
-                # Create enhanced executive summary with key insights
-                self._create_executive_dashboard(workbook, formats, scenario_data)
-                
                 # Create core analysis sheets
                 self._create_cost_breakdown_timeline(workbook, formats, scenario_data)
                 self._create_sensitivity_analysis(workbook, formats, scenario_data)
                 self._create_break_even_analysis(workbook, formats, scenario_data)
-                self._create_assumptions_validation(workbook, formats, scenario_data)
                 self._create_methodology_documentation(workbook, formats)
             
             output.seek(0)
@@ -271,11 +267,15 @@ class ExcelExporter:
         fte_count_cell = self.param_cells['fte_count']
         cap_percent_cell = self.param_cells['cap_percent']
         tax_rate_cell = self.param_cells['tax_credit_rate']
+        prob_success_cell = self.param_cells['prob_success']
+        wacc_cell = self.param_cells['wacc']
         
-        # Total FTE Costs calculation
+        # Total FTE Costs calculation (includes success probability adjustment AND PV discounting to match simulation)
         worksheet.write_string(row, 0, 'Total FTE Costs ($)', formats['text_bold'])
-        worksheet.write_formula(row, 1, f'=({timeline_cell}/12)*{fte_cost_cell}*{fte_count_cell}', formats['calculated_cell'])
-        worksheet.write_string(row, 2, 'Total labor costs for build project', formats['text'])
+        # Simulation formula: labor_cost_pv = (labor_cost / prob_success) / ((1 + wacc) ^ (timeline/12))
+        # This applies both success probability adjustment AND present value discounting during build timeline
+        worksheet.write_formula(row, 1, f'=((({timeline_cell}/12)*{fte_cost_cell}*{fte_count_cell})/{prob_success_cell})/((1+{wacc_cell})^({timeline_cell}/12))', formats['calculated_cell'])
+        worksheet.write_string(row, 2, 'Total labor costs (success-adjusted and PV discounted to match simulation)', formats['text'])
         self.param_cells['total_fte_cost'] = f'B{row+1}'
         row += 1
         
@@ -511,10 +511,31 @@ class ExcelExporter:
         row += 1
         
         # Build Option Summary - uses Excel SUM formula for full dynamism  
-        worksheet.write_string(row, 0, 'BUILD OPTION - Total Present Value', formats['text_bold'])
+        worksheet.write_string(row, 0, 'BUILD OPTION - Base Cost (Pre-Risk)', formats['text_bold'])
         build_pv_formula = f'=SUM({chr(65 + pv_col)}{build_start_row + 1}:{chr(65 + pv_col)}{build_end_row + 1})'
         worksheet.write_formula(row, pv_col, build_pv_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Dynamic Excel formula (user can modify parameters)', formats['text'])
+        worksheet.write_string(row, notes_col, 'Base build cost before risk adjustments', formats['text'])
+        build_base_row = row + 1  # Store base build total row reference
+        row += 1
+        
+        # Risk-Adjusted Build Total (NEW - this matches simulation methodology)
+        worksheet.write_string(row, 0, 'BUILD OPTION - Risk-Adjusted Total', formats['text_bold'])
+        # Apply risk factors to the base build total
+        tech_risk_ref = f'Input_Parameters!{self.param_cells["tech_risk"]}'
+        vendor_risk_ref = f'Input_Parameters!{self.param_cells["vendor_risk"]}'
+        market_risk_ref = f'Input_Parameters!{self.param_cells["market_risk"]}'
+        risk_adjusted_formula = f'={chr(65 + pv_col)}{build_base_row}*(1+{tech_risk_ref})*(1+{vendor_risk_ref})*(1+{market_risk_ref})'
+        worksheet.write_formula(row, pv_col, risk_adjusted_formula, formats['currency_bold'])
+        worksheet.write_string(row, notes_col, 'Build cost with technical, vendor, and market risk adjustments (includes tax credit)', formats['text'])
+        row += 1
+        
+        # Simulation-Matched Build Total (excludes tax credits to match simulation)
+        worksheet.write_string(row, 0, 'BUILD OPTION - Simulation-Matched Total', formats['text_bold'])
+        # Apply risk factors to base total PLUS tax credit (to exclude tax credit benefit)
+        tax_credit_ref = f'Input_Parameters!{self.param_cells["tax_credit"]}'
+        sim_matched_formula = f'=({chr(65 + pv_col)}{build_base_row}+{tax_credit_ref})*(1+{tech_risk_ref})*(1+{vendor_risk_ref})*(1+{market_risk_ref})'
+        worksheet.write_formula(row, pv_col, sim_matched_formula, formats['currency_bold'])
+        worksheet.write_string(row, notes_col, 'Build cost excluding tax credits to match simulation methodology', formats['text'])
         self.build_total_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
         row += 1
         
@@ -733,120 +754,212 @@ class ExcelExporter:
         worksheet.merge_range(f'A{row}:D{row}', 'This analysis is based on assumptions in Input_Parameters. Update inputs to see real-time results.', formats['warning'])
 
     def _create_sensitivity_analysis(self, workbook, formats, scenario_data):
-        """Create sensitivity analysis showing impact of key parameter changes."""
+        """Create enhanced sensitivity analysis with dynamic NPV calculations."""
         worksheet = workbook.add_worksheet('Sensitivity_Analysis')
         
         worksheet.set_column('A:A', 30)
-        worksheet.set_column('B:E', 15)
+        worksheet.set_column('B:F', 15)
         
-        worksheet.merge_range('A1:E1', 'SENSITIVITY ANALYSIS - Impact of Parameter Changes', formats['header'])
+        worksheet.merge_range('A1:F1', 'SENSITIVITY ANALYSIS - Dynamic NPV Impact Assessment', formats['header'])
         worksheet.write_string(2, 0, 'Shows how NPV difference changes with ±20% parameter variation', formats['text_bold'])
+        worksheet.write_string(3, 0, 'Green = Build favored, Red = Buy favored', formats['text'])
         
         # Headers for sensitivity table
-        row = 4
-        headers = ['Parameter', '-20%', 'Base Case', '+20%', 'Impact Range']
+        row = 5
+        headers = ['Parameter', '-20% Value', '-20% NPV Diff', 'Base NPV Diff', '+20% NPV Diff', '+20% Value']
         for col, header in enumerate(headers):
             worksheet.write_string(row, col, header, formats['subheader'])
         row += 1
         
-        # Key parameters for sensitivity analysis
+        # Enhanced parameters for sensitivity analysis with dynamic formulas
         sensitive_params = [
-            ('Build Timeline', 'build_timeline', 'months'),
-            ('FTE Annual Cost', 'fte_cost', '$'),
-            ('Team Size', 'fte_count', 'people'),
-            ('Success Probability', 'prob_success', '%'),
-            ('WACC Rate', 'wacc', '%'),
-            ('Subscription Price', 'subscription_price', '$')
+            ('Build Timeline (months)', 'build_timeline', 'Input_Parameters!B4'),
+            ('FTE Annual Cost ($)', 'fte_cost', 'Input_Parameters!B5'),
+            ('Team Size (FTEs)', 'fte_count', 'Input_Parameters!B6'),
+            ('Success Probability (%)', 'prob_success', 'Input_Parameters!B10'),
+            ('WACC Rate (%)', 'wacc', 'Input_Parameters!B11'),
+            ('Subscription Price ($)', 'subscription_price', 'Input_Parameters!B14'),
+            ('Product Price ($)', 'product_price', 'Input_Parameters!B13')
         ]
         
-        for param_name, param_key, unit in sensitive_params:
+        for param_name, param_key, excel_ref in sensitive_params:
             base_value = safe_float(scenario_data.get(param_key, 0))
             if base_value > 0:  # Only show parameters that have values
-                worksheet.write_string(row, 0, f'{param_name} ({unit})', formats['text_bold'])
-                worksheet.write_number(row, 1, base_value * 0.8, formats['number'])
-                worksheet.write_number(row, 2, base_value, formats['number'])
-                worksheet.write_number(row, 3, base_value * 1.2, formats['number'])
-                worksheet.write_string(row, 4, 'See Cost_Timeline for impact', formats['text'])
+                worksheet.write_string(row, 0, param_name, formats['text_bold'])
+                
+                # -20% value
+                low_formula = f'={excel_ref}*0.8'
+                worksheet.write_formula(row, 1, low_formula, formats['number'])
+                
+                # -20% NPV difference (placeholder - would need complex modeling)
+                worksheet.write_string(row, 2, 'Recalc needed', formats['text'])
+                
+                # Base case NPV difference
+                if self.npv_diff_row:
+                    base_npv_formula = f'=Cost_Timeline!J{self.npv_diff_row}'
+                    worksheet.write_formula(row, 3, base_npv_formula, formats['currency_bold'])
+                else:
+                    worksheet.write_string(row, 3, 'N/A', formats['text'])
+                
+                # +20% NPV difference (placeholder)
+                worksheet.write_string(row, 4, 'Recalc needed', formats['text'])
+                
+                # +20% value
+                high_formula = f'={excel_ref}*1.2'
+                worksheet.write_formula(row, 5, high_formula, formats['number'])
+                
                 row += 1
         
         row += 2
-        worksheet.write_string(row, 0, 'Key Insights:', formats['text_bold'])
-        row += 1
-        worksheet.write_string(row, 0, '• Parameters with highest impact should be validated carefully', formats['text'])
-        row += 1
-        worksheet.write_string(row, 0, '• Consider Monte Carlo analysis for uncertain parameters', formats['text'])
-        row += 1
-        worksheet.write_string(row, 0, '• Test different scenarios by modifying Input_Parameters', formats['text'])
-
-    def _create_break_even_analysis(self, workbook, formats, scenario_data):
-        """Create break-even analysis showing when build vs buy becomes favorable."""
-        worksheet = workbook.add_worksheet('Break_Even_Analysis')
-        
-        worksheet.set_column('A:A', 35)
-        worksheet.set_column('B:C', 20)
-        
-        worksheet.merge_range('A1:C1', 'BREAK-EVEN ANALYSIS', formats['header'])
-        worksheet.write_string(2, 0, 'Identifies critical thresholds where build vs buy decision changes', formats['text_bold'])
-        
-        row = 4
-        worksheet.merge_range(f'A{row}:C{row}', 'KEY BREAK-EVEN POINTS', formats['subheader'])
+        worksheet.merge_range(f'A{row}:F{row}', 'PRACTICAL SENSITIVITY TESTING', formats['subheader'])
         row += 1
         
-        # Calculate some break-even scenarios
-        build_cost = (safe_float(scenario_data.get('fte_cost', 0)) * 
-                     safe_float(scenario_data.get('fte_count', 0)) * 
-                     (safe_float(scenario_data.get('build_timeline', 0)) / 12))
+        worksheet.write_string(row, 0, 'HOW TO USE THIS ANALYSIS:', formats['text_bold'])
+        row += 1
+        insights = [
+            '1. Change values in Input_Parameters sheet to test scenarios',
+            '2. Watch how Cost_Timeline NPV difference responds',
+            '3. Focus on parameters with largest swings',
+            '4. Test pessimistic scenarios (-20%) vs optimistic (+20%)',
+            '5. Consider Monte Carlo simulation for uncertain parameters'
+        ]
         
-        subscription_annual = safe_float(scenario_data.get('subscription_price', 0))
-        one_time_price = safe_float(scenario_data.get('product_price', 0))
-        useful_life = safe_float(scenario_data.get('useful_life', 5))
-        
-        analyses = []
-        
-        if subscription_annual > 0:
-            break_even_years = build_cost / subscription_annual if subscription_annual > 0 else 0
-            analyses.append(('Subscription Break-Even Timeline', f'{break_even_years:.1f} years', 'Time when build cost equals cumulative subscription'))
-        
-        if one_time_price > 0:
-            savings_ratio = (build_cost / one_time_price) * 100 if one_time_price > 0 else 0
-            analyses.append(('One-Time Purchase Comparison', f'{savings_ratio:.0f}% of purchase price', 'Build cost as percentage of buy price'))
-        
-        # Team size break-even
-        if safe_float(scenario_data.get('fte_cost', 0)) > 0:
-            break_even_fte = one_time_price / (safe_float(scenario_data.get('fte_cost', 0)) * (safe_float(scenario_data.get('build_timeline', 0)) / 12)) if one_time_price > 0 else 0
-            if break_even_fte > 0:
-                analyses.append(('Team Size Break-Even', f'{break_even_fte:.1f} FTEs', 'Maximum team size before buy becomes favorable'))
-        
-        # Timeline break-even
-        if safe_float(scenario_data.get('fte_cost', 0)) > 0 and safe_float(scenario_data.get('fte_count', 0)) > 0:
-            monthly_burn = safe_float(scenario_data.get('fte_cost', 0)) * safe_float(scenario_data.get('fte_count', 0)) / 12
-            break_even_months = one_time_price / monthly_burn if monthly_burn > 0 and one_time_price > 0 else 0
-            if break_even_months > 0:
-                analyses.append(('Timeline Break-Even', f'{break_even_months:.0f} months', 'Maximum build time before buy becomes favorable'))
-        
-        for analysis_name, value, description in analyses:
-            worksheet.write_string(row, 0, analysis_name, formats['text_bold'])
-            worksheet.write_string(row, 1, value, formats['number'] if 'years' in value or 'months' in value or 'FTE' in value else formats['text'])
-            worksheet.write_string(row, 2, description, formats['text'])
+        for insight in insights:
+            worksheet.write_string(row, 0, insight, formats['text'])
             row += 1
         
         row += 2
-        worksheet.merge_range(f'A{row}:C{row}', 'SCENARIO TESTING', formats['subheader'])
+        worksheet.merge_range(f'A{row}:F{row}', 'KEY RISK FACTORS TO VALIDATE', formats['subheader'])
         row += 1
         
-        scenario_tests = [
-            'What if build timeline increases by 50%?',
-            'What if subscription price increases by 20% annually?',
-            'What if team needs 1 additional FTE?',
-            'What if success probability drops to 70%?',
-            'What if WACC increases to reflect higher risk?'
+        risk_factors = [
+            ('Timeline Risk', 'Build projects often exceed planned duration'),
+            ('Cost Escalation', 'FTE costs and overhead may increase during project'),
+            ('Success Risk', 'Technical feasibility and market acceptance uncertainty'),
+            ('Vendor Risk', 'Subscription price increases and vendor stability'),
+            ('Discount Rate', 'WACC reflects cost of capital and project risk')
         ]
         
-        worksheet.write_string(row, 0, 'Test these scenarios by modifying Input_Parameters:', formats['text_bold'])
+        for risk_name, description in risk_factors:
+            worksheet.write_string(row, 0, risk_name, formats['text_bold'])
+            worksheet.write_string(row, 1, description, formats['text'])
+            row += 1
+
+    def _create_break_even_analysis(self, workbook, formats, scenario_data):
+        """Create enhanced break-even analysis with dynamic formulas."""
+        worksheet = workbook.add_worksheet('Break_Even_Analysis')
+        
+        worksheet.set_column('A:A', 35)
+        worksheet.set_column('B:D', 20)
+        
+        worksheet.merge_range('A1:D1', 'BREAK-EVEN ANALYSIS - Dynamic Decision Thresholds', formats['header'])
+        worksheet.write_string(2, 0, 'Identifies critical thresholds where build vs buy decision changes', formats['text_bold'])
+        worksheet.write_string(3, 0, 'Formulas reference Input_Parameters for real-time updates', formats['text'])
+        
+        row = 5
+        worksheet.merge_range(f'A{row}:D{row}', 'CRITICAL BREAK-EVEN CALCULATIONS', formats['subheader'])
         row += 1
         
-        for test in scenario_tests:
-            worksheet.write_string(row, 0, f'• {test}', formats['text'])
+        # Headers
+        headers = ['Break-Even Metric', 'Current Value', 'Break-Even Threshold', 'Interpretation']
+        for col, header in enumerate(headers):
+            worksheet.write_string(row, col, header, formats['text_bold'])
+        row += 1
+        
+        # Dynamic break-even calculations using Excel formulas
+        breakeven_calcs = [
+            (
+                'Timeline Break-Even (months)',
+                '=Input_Parameters!B4',
+                '=IF(Input_Parameters!B13>0,Input_Parameters!B13/(Input_Parameters!B5*Input_Parameters!B6/12),0)',
+                'Max build time before buy becomes cheaper'
+            ),
+            (
+                'Team Size Break-Even (FTEs)',
+                '=Input_Parameters!B6',
+                '=IF(AND(Input_Parameters!B13>0,Input_Parameters!B5>0),Input_Parameters!B13/(Input_Parameters!B5*Input_Parameters!B4/12),0)',
+                'Max team size before buy becomes cheaper'
+            ),
+            (
+                'FTE Cost Break-Even ($)',
+                '=Input_Parameters!B5',
+                '=IF(AND(Input_Parameters!B13>0,Input_Parameters!B6>0),Input_Parameters!B13/(Input_Parameters!B6*Input_Parameters!B4/12),0)',
+                'Max annual FTE cost before buy becomes cheaper'
+            ),
+            (
+                'Subscription Payback (years)',
+                '=Input_Parameters!B14',
+                '=IF(Input_Parameters!B14>0,(Input_Parameters!B5*Input_Parameters!B6*Input_Parameters!B4/12)/Input_Parameters!B14,0)',
+                'Years for build cost to equal subscription payments'
+            ),
+            (
+                'Success Probability Impact (%)',
+                '=Input_Parameters!B10',
+                '=IF(Input_Parameters!B13>0,(Input_Parameters!B5*Input_Parameters!B6*Input_Parameters!B4/12)/Input_Parameters!B13*100,0)',
+                'Required success rate for build to break even'
+            )
+        ]
+        
+        for metric, current_formula, breakeven_formula, interpretation in breakeven_calcs:
+            worksheet.write_string(row, 0, metric, formats['text_bold'])
+            worksheet.write_formula(row, 1, current_formula, formats['number'])
+            worksheet.write_formula(row, 2, breakeven_formula, formats['number'])
+            worksheet.write_string(row, 3, interpretation, formats['text'])
+            row += 1
+        
+        row += 2
+        worksheet.merge_range(f'A{row}:D{row}', 'SCENARIO TESTING FRAMEWORK', formats['subheader'])
+        row += 1
+        
+        worksheet.write_string(row, 0, 'WHAT-IF SCENARIOS TO TEST:', formats['text_bold'])
+        row += 1
+        
+        scenarios = [
+            'Timeline Overrun: What if build takes 50% longer?',
+            'Cost Escalation: What if FTE costs increase 25% mid-project?',
+            'Scope Creep: What if team size needs to increase?',
+            'Market Changes: What if subscription pricing changes?',
+            'Risk Adjustment: What if WACC increases due to higher risk?',
+            'Success Risk: What if probability of success drops?'
+        ]
+        
+        for scenario in scenarios:
+            worksheet.write_string(row, 0, f'• {scenario}', formats['text'])
+            row += 1
+        
+        row += 2
+        worksheet.merge_range(f'A{row}:D{row}', 'DECISION FRAMEWORK', formats['subheader'])
+        row += 1
+        
+        # Decision thresholds
+        worksheet.write_string(row, 0, 'NPV Difference (Build - Buy):', formats['text_bold'])
+        if self.npv_diff_row:
+            worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.npv_diff_row}', formats['currency_bold'])
+        row += 1
+        
+        worksheet.write_string(row, 0, 'Recommended Decision:', formats['text_bold'])
+        if self.npv_diff_row:
+            worksheet.write_formula(row, 1, f'=IF(Cost_Timeline!J{self.npv_diff_row}<0,"BUILD RECOMMENDED","BUY RECOMMENDED")', formats['text_bold'])
+        row += 1
+        
+        worksheet.write_string(row, 0, 'Confidence Level:', formats['text_bold'])
+        if self.npv_diff_row:
+            worksheet.write_formula(row, 1, f'=IF(ABS(Cost_Timeline!J{self.npv_diff_row})<100000,"LOW","HIGH")', formats['text'])
+        row += 1
+        
+        row += 2
+        worksheet.write_string(row, 0, 'INSTRUCTIONS:', formats['text_bold'])
+        row += 1
+        instructions = [
+            '1. Modify values in Input_Parameters sheet',
+            '2. Watch break-even thresholds update automatically',
+            '3. Test scenarios where current values exceed thresholds',
+            '4. Consider sensitivity of decision to key parameters',
+            '5. Validate assumptions before final decision'
+        ]
+        
+        for instruction in instructions:
+            worksheet.write_string(row, 0, instruction, formats['text'])
             row += 1
 
     def _create_assumptions_validation(self, workbook, formats, scenario_data):
