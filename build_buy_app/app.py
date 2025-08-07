@@ -1280,7 +1280,7 @@ class BuildVsBuyApp:
         ], className="scenario-table-container")
     
     
-    def run(self, debug=False, host='127.0.0.1', port=8050):
+    def run(self, debug=False, host='127.0.0.1', port=8060):
         """Run the Dash app."""
         self.app.run(debug=debug, host=host, port=port)
 
