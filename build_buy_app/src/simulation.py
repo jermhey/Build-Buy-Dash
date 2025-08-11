@@ -273,9 +273,10 @@ class BuildVsBuySimulator:
             wacc = core_params['wacc']
             
             # Calculate NPV of subscription payments
-            for year in range(useful_life):
-                payment = subscription_price * ((1 + subscription_increase) ** year)
-                pv = payment / ((1 + wacc) ** year)
+            # Use 1-based indexing to match Excel: payments in years 1,2,3,4,5 for 5-year life
+            for year in range(1, useful_life + 1):
+                payment = subscription_price * ((1 + subscription_increase) ** (year - 1))
+                pv = payment / ((1 + wacc) ** year)  # Discount to present value
                 buy_total_cost += pv
         
         return buy_total_cost

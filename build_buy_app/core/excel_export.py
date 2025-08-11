@@ -89,8 +89,7 @@ class ExcelExporter:
                 # Create sheets in order
                 self._create_input_parameters_sheet(workbook, formats, scenario_data)
                 self._create_cost_breakdown_timeline(workbook, formats, scenario_data)
-                self._create_executive_summary(workbook, formats, scenario_data)
-                self._create_methodology_documentation(workbook, formats)
+                # Removed executive summary and methodology sheets per user request
             
             output.seek(0)
             return output.getvalue()
@@ -191,6 +190,7 @@ class ExcelExporter:
         add_param('Miscellaneous Costs', 'misc_costs', scenario_data.get('misc_costs', 0), 'Other one-time costs')
         add_param('Monthly Amortization', 'amortization', scenario_data.get('amortization', 0), 'Monthly recurring costs during build')
         add_param('Annual Maintenance', 'maint_opex', scenario_data.get('maint_opex', 0), 'Ongoing annual maintenance')
+        add_param('Maintenance Escalation', 'maint_escalation', scenario_data.get('maint_escalation', 3), 'Annual maintenance cost increase %', 'percent')
         
         # Calculated values section
         row += 2
@@ -221,21 +221,25 @@ class ExcelExporter:
         ws = workbook.add_worksheet(self.TIMELINE_SHEET)
         row = 0
         
-        # Main Title with enhanced formatting
-        ws.merge_range('A1:J1', 'Build vs Buy Cost Analysis Timeline', formats['header'])
-        row += 2
-        
         # Get core parameters
         useful_life = int(safe_float(scenario_data.get('useful_life', 5)))
         build_timeline = safe_float(scenario_data.get('build_timeline', 12))
-        max_years = max(6, useful_life + 2)  # Extended for better view
+        # Dynamic year columns based on useful life (but minimum of 3 for readability)
+        max_years = max(3, useful_life + 1)
         
         # Reference key cells safely
         total_fte_ref = safe_cell_ref(self.param_cells.get('total_fte_cost'))
         wacc_ref = safe_cell_ref(self.param_cells.get('wacc'))
         
-        # Enhanced headers with better organization
-        headers = ['Cost Component', 'Year 0'] + [f'Year {y}' for y in range(1, max_years + 1)] + ['Total NPV', 'Notes']
+        # Dynamic headers based on useful life
+        year_headers = ['Year 0'] + [f'Year {y}' for y in range(1, max_years + 1)]
+        headers = ['Cost Component'] + year_headers + ['Total NPV', 'Notes']
+        
+        # Merge title across all columns
+        last_col_letter = chr(65 + len(headers) - 1)  # Convert to Excel column letter
+        ws.merge_range(f'A1:{last_col_letter}1', 'Build vs Buy Cost Analysis Timeline', formats['header'])
+        row += 2
+        
         for col, header in enumerate(headers):
             ws.write_string(row, col, header, formats['subheader'])
         row += 1
@@ -278,14 +282,33 @@ class ExcelExporter:
                 ws.write_formula(row, npv_col, safe_formula(f"={cost_ref}"), formats['currency_bold'])
             
             elif timing == 'maintenance':
-                # No cost in Year 0, annual costs in subsequent years
+                # No cost in Year 0, escalating annual costs in subsequent years
                 ws.write_number(row, 1, 0, formats['currency'])
-                for year_col in range(2, min(2 + useful_life, total_col)):
-                    ws.write_formula(row, year_col, safe_formula(f"={cost_ref}"), formats['currency'])
-                for year_col in range(2 + useful_life, total_col):
+                
+                # Get maintenance escalation rate
+                maint_escalation_ref = safe_cell_ref(self.param_cells.get('maint_escalation'))
+                maint_escalation = safe_float(scenario_data.get('maint_escalation', 3)) / 100
+                
+                # Calculate escalating maintenance costs
+                for year_idx in range(1, useful_life + 1):
+                    if year_idx + 1 < total_col:
+                        year_col = year_idx + 1
+                        # Escalated cost formula: base_cost * (1 + escalation_rate)^(year-1)
+                        escalated_formula = f"={cost_ref}*(1+{maint_escalation_ref})^({year_idx-1})"
+                        ws.write_formula(row, year_col, safe_formula(escalated_formula), formats['currency'])
+                
+                # Fill remaining years with zeros
+                for year_col in range(useful_life + 2, total_col):
                     ws.write_number(row, year_col, 0, formats['currency'])
-                # NPV calculation for annuity
-                npv_formula = f"={cost_ref}*((1-(1+{wacc_ref})^-{useful_life})/{wacc_ref})"
+                
+                # NPV calculation for escalating annuity
+                if maint_escalation == 0:
+                    # Simple annuity if no escalation
+                    npv_formula = f"={cost_ref}*((1-(1+{wacc_ref})^-{useful_life})/{wacc_ref})"
+                else:
+                    # Growing annuity formula for escalating costs
+                    npv_formula = f"={cost_ref}*((1-((1+{maint_escalation_ref})/(1+{wacc_ref}))^{useful_life})/({wacc_ref}-{maint_escalation_ref}))"
+                
                 ws.write_formula(row, npv_col, safe_formula(npv_formula), formats['currency_bold'])
             
             # Add description
@@ -357,22 +380,23 @@ class ExcelExporter:
             ws.write_string(row, 0, 'Annual Subscription', formats['text'])
             ws.write_number(row, 1, 0, formats['currency'])  # No cost in Year 0
             
-            # Calculate subscription costs with escalation
-            for year_idx in range(1, min(useful_life + 1, max_years)):
-                year_col = year_idx + 1
-                escalated_cost = subscription_price * ((1 + subscription_increase) ** (year_idx - 1))
-                ws.write_number(row, year_col, escalated_cost, formats['currency'])
+            # Calculate subscription costs with escalation for the useful life period
+            for year_idx in range(1, useful_life + 1):
+                if year_idx + 1 < total_col:  # Make sure we don't exceed column range
+                    year_col = year_idx + 1
+                    escalated_cost = subscription_price * ((1 + subscription_increase) ** (year_idx - 1))
+                    ws.write_number(row, year_col, escalated_cost, formats['currency'])
             
-            # Fill remaining years with zeros
+            # Fill remaining years with zeros if any
             for year_col in range(useful_life + 2, total_col):
                 ws.write_number(row, year_col, 0, formats['currency'])
             
             # NPV calculation for subscription
             if subscription_increase == 0:
-                # Simple annuity
+                # Simple annuity formula
                 npv_formula = f"={subscription_price}*((1-(1+{wacc_ref})^-{useful_life})/{wacc_ref})"
             else:
-                # Growing annuity
+                # Growing annuity formula
                 growth_rate = subscription_increase
                 npv_formula = f"={subscription_price}*((1-((1+{growth_rate})/(1+{wacc_ref}))^{useful_life})/({wacc_ref}-{growth_rate}))"
             

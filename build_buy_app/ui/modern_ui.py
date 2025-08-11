@@ -353,6 +353,7 @@ class ModernUI:
             html.Div(id="buy_inputs", style={"display": "none"}),
             dcc.Input(id="maint_opex_modern", type="number", value=0, style={"display": "none"}),
             dcc.Input(id="maint_opex_std_modern", type="number", value=0, style={"display": "none"}),
+            dcc.Input(id="maint_escalation_modern", type="number", value=3, style={"display": "none"}),
             dcc.Input(id="capex_modern", type="number", value=0, style={"display": "none"}),
             dcc.Input(id="amortization_modern", type="number", value=0, style={"display": "none"}),
             # Hidden buy input components for callback compatibility - always present

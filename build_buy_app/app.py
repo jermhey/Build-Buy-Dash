@@ -95,6 +95,7 @@ class BuildVsBuyApp:
              # Dynamic cost inputs
              State('maint_opex_modern', 'value'),
              State('maint_opex_std_modern', 'value'),
+             State('maint_escalation_modern', 'value'),
              State('capex_modern', 'value'),
              State('amortization_modern', 'value')],
             prevent_initial_call=True
@@ -105,7 +106,7 @@ class BuildVsBuyApp:
                                      risk_selector, cost_selector,
                                      product_price, subscription_price, subscription_increase,
                                      tech_risk, vendor_risk, market_risk,
-                                     maint_opex, maint_opex_std, capex, amortization):
+                                     maint_opex, maint_opex_std, maint_escalation, capex, amortization):
             """Update calculations using modern UI inputs."""
             if not n_clicks:
                 return [html.Div("Click 'Run Analysis' to see results")], {}
@@ -158,6 +159,7 @@ class BuildVsBuyApp:
                     'market_risk': safe_float(market_risk, 0),
                     'maint_opex': safe_float(maint_opex, 0),
                     'maint_opex_std': safe_float(maint_opex_std, 0),
+                    'maint_escalation': safe_float(maint_escalation, 3),
                     'capex': safe_float(capex, 0),
                     'amortization': safe_float(amortization, 0)
                 }
@@ -207,6 +209,7 @@ class BuildVsBuyApp:
              State('market_risk', 'value'),
              State('maint_opex_modern', 'value'),
              State('maint_opex_std_modern', 'value'),
+             State('maint_escalation_modern', 'value'),
              State('capex_modern', 'value'),
              State('amortization_modern', 'value')]
         )
@@ -216,7 +219,7 @@ class BuildVsBuyApp:
                           prob_success, wacc, buy_selector, risk_selector, cost_selector,
                           product_price, subscription_price, subscription_increase,
                           tech_risk, vendor_risk, market_risk,
-                          maint_opex, maint_opex_std, capex, amortization):
+                          maint_opex, maint_opex_std, maint_escalation, capex, amortization):
             """Generate and download Excel report using the most recent scenario."""
             if not n_clicks:
                 return no_update
@@ -257,6 +260,7 @@ class BuildVsBuyApp:
                         'market_risk': most_recent_scenario.get('market_risk', market_risk),
                         'maint_opex': most_recent_scenario.get('maint_opex', maint_opex),
                         'maint_opex_std': most_recent_scenario.get('maint_opex_std', maint_opex_std),
+                        'maint_escalation': most_recent_scenario.get('maint_escalation', maint_escalation),
                         'capex': most_recent_scenario.get('capex', capex),
                         'amortization': most_recent_scenario.get('amortization', amortization)
                     }
@@ -287,6 +291,7 @@ class BuildVsBuyApp:
                             'market_risk': safe_float(market_risk, 0),
                             'maint_opex': safe_float(maint_opex, 0),
                             'maint_opex_std': safe_float(maint_opex_std, 0),
+                            'maint_escalation': safe_float(maint_escalation, 3),
                             'capex': safe_float(capex, 0),
                             'amortization': safe_float(amortization, 0)
                         }
@@ -321,6 +326,7 @@ class BuildVsBuyApp:
                         'market_risk': safe_float(market_risk, 0),
                         'maint_opex': safe_float(maint_opex, 0),
                         'maint_opex_std': safe_float(maint_opex_std, 0),
+                        'maint_escalation': safe_float(maint_escalation, 3),
                         'capex': safe_float(capex, 0),
                         'amortization': safe_float(amortization, 0)
                     }
@@ -444,8 +450,10 @@ class BuildVsBuyApp:
                     'label': 'Annual Maintenance/OpEx ($)', 
                     'icon': 'cogs', 
                     'has_std': True,
+                    'has_escalation': True,
                     'description': 'Ongoing annual operational and maintenance costs',
-                    'std_description': 'Uncertainty in annual OpEx costs'
+                    'std_description': 'Uncertainty in annual OpEx costs',
+                    'escalation_description': 'Annual escalation rate for maintenance costs'
                 },
                 'capex': {
                     'label': 'CapEx Investment ($)', 
@@ -509,6 +517,31 @@ class BuildVsBuyApp:
                                 html.Small(config['std_description'], className="text-muted d-block mb-4")
                             ])
                         )
+                    
+                    # Escalation input for opex
+                    if config.get('has_escalation'):
+                        inputs.append(
+                            html.Div([
+                                html.Label("Annual Escalation Rate (%)", className="form-label fw-bold mt-2 mb-2"),
+                                dbc.InputGroup([
+                                    dbc.InputGroupText([
+                                        html.I(className="fas fa-trending-up text-warning"),
+                                        "%"
+                                    ]),
+                                    dbc.Input(
+                                        id="maint_escalation_display",
+                                        type="number",
+                                        placeholder="Annual increase rate",
+                                        value=3,
+                                        min=0,
+                                        max=20,
+                                        step=0.1,
+                                        className="form-control-lg"
+                                    )
+                                ], className="mb-2"),
+                                html.Small(config['escalation_description'], className="text-muted d-block mb-4")
+                            ])
+                        )
             
             return inputs
         
@@ -528,6 +561,14 @@ class BuildVsBuyApp:
         )
         def sync_maint_opex_std(value):
             return value or 0
+        
+        @self.app.callback(
+            Output('maint_escalation_modern', 'value'),
+            [Input('maint_escalation_display', 'value')],
+            prevent_initial_call=True
+        )
+        def sync_maint_escalation(value):
+            return value or 3
         
         @self.app.callback(
             Output('capex_modern', 'value'),
