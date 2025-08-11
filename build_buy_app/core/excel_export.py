@@ -16,32 +16,23 @@ def safe_float(val, default=0.0):
 
 
 class ExcelExporter:
-    """Handles Excel expo        # Key insights section
-        row += 2
-        worksheet.merge_range(f'A{row}:L{row}', 'KEY INSIGHTS & VALIDATION', formats['subheader'])
-        row += 1
-        
-        insights = [
-            "• Present values use WACC discounting for accurate comparison",
-            "• Build costs include R&D tax credit benefits",
-            "• Risk factors are applied as cost multipliers",
-            "• All calculations update automatically when Input_Parameters change",
-            "• Subscription costs start in Year 1 with proper escalation"
-        ]
-        
-        for insight in insights:
-            worksheet.write_string(row, 0, insight, formats['text'])
-            row += 1
-        
-        # Update Executive Dashboard with actual formulas now that we have the references
-        self._update_executive_dashboard_formulas(workbook, formats) for Build vs Buy analysis."""
-    
+    """Excel export builder for Build vs Buy analysis.
+
+    NOTE: Previous version had accidental docstring corruption embedding runtime code.
+    Cleaned and standardized here. Sheet names are centralized to prevent #REF! errors.
+    """
+
+    INPUT_SHEET = 'Input Parameters'
+    TIMELINE_SHEET = 'Cost Timeline'
+
     def __init__(self):
         """Initialize the Excel exporter."""
-        self.param_cells = {}  # Track cell references for dynamic formulas
-        self.build_total_row = None  # Track build total row for executive summary
-        self.buy_total_row = None    # Track buy total row for executive summary
-        self.npv_diff_row = None     # Track NPV difference row for executive summary
+        self.param_cells = {}
+        self.build_total_row = None
+        self.buy_total_row = None
+        self.npv_diff_row = None
+        self.pv_col_letter = None  # Letter of Present Value column in Cost Timeline (for cross-sheet formulas)
+        self.scenario_data = {}
     
     def create_excel_export(self, scenario_data, stored_scenarios=None):
         """
@@ -63,12 +54,20 @@ class ExcelExporter:
                 
                 # Create dynamic input parameters sheet FIRST for user configuration
                 self._create_input_parameters_sheet(workbook, formats, scenario_data)
-                
-                # Create core analysis sheets
+                # Store for later reference (simulation results etc.)
+                self.scenario_data = scenario_data
+
+                # Core timeline sheet (must precede summary/dashboard)
                 self._create_cost_breakdown_timeline(workbook, formats, scenario_data)
+                # Executive summary & dashboard depend on timeline row/column references
+                self._create_executive_summary(workbook, formats, scenario_data)
+                self._create_executive_dashboard(workbook, formats, scenario_data)
+                # Other analytical/supporting sheets
                 self._create_sensitivity_analysis(workbook, formats, scenario_data)
                 self._create_break_even_analysis(workbook, formats, scenario_data)
                 self._create_methodology_documentation(workbook, formats)
+                # Update dashboard formulas now that all rows established
+                self._update_executive_dashboard_formulas(workbook, formats)
             
             output.seek(0)
             return output.getvalue()
@@ -164,7 +163,7 @@ class ExcelExporter:
     
     def _create_input_parameters_sheet(self, workbook, formats, scenario_data):
         """Create dynamic input parameters sheet that other sheets reference."""
-        worksheet = workbook.add_worksheet('Input_Parameters')
+        worksheet = workbook.add_worksheet('Input Parameters')
         
         # Set column widths
         worksheet.set_column('A:A', 35)  # Parameter names
@@ -270,12 +269,12 @@ class ExcelExporter:
         prob_success_cell = self.param_cells['prob_success']
         wacc_cell = self.param_cells['wacc']
         
-        # Total FTE Costs calculation (includes success probability adjustment AND PV discounting to match simulation)
+        # Total FTE Costs calculation (nominal, success-adjusted - PV handled in Cost Timeline)
         worksheet.write_string(row, 0, 'Total FTE Costs ($)', formats['text_bold'])
-        # Simulation formula: labor_cost_pv = (labor_cost / prob_success) / ((1 + wacc) ^ (timeline/12))
-        # This applies both success probability adjustment AND present value discounting during build timeline
-        worksheet.write_formula(row, 1, f'=((({timeline_cell}/12)*{fte_cost_cell}*{fte_count_cell})/{prob_success_cell})/((1+{wacc_cell})^({timeline_cell}/12))', formats['calculated_cell'])
-        worksheet.write_string(row, 2, 'Total labor costs (success-adjusted and PV discounted to match simulation)', formats['text'])
+        # Nominal formula: labor_cost_nominal = (timeline/12) * fte_cost * fte_count / prob_success
+        # Cost Timeline will handle proper year-by-year PV discounting based on cash flow timing
+        worksheet.write_formula(row, 1, f'=(({timeline_cell}/12)*{fte_cost_cell}*{fte_count_cell})/{prob_success_cell}', formats['calculated_cell'])
+        worksheet.write_string(row, 2, 'Total labor costs (success-adjusted, nominal - PV calculated in Cost Timeline)', formats['text'])
         self.param_cells['total_fte_cost'] = f'B{row+1}'
         row += 1
         
@@ -318,353 +317,392 @@ class ExcelExporter:
             row += 1
 
     def _create_cost_breakdown_timeline(self, workbook, formats, scenario_data):
-        """Create comprehensive cost breakdown timeline with WACC discounting - DYNAMIC VERSION."""
-        worksheet = workbook.add_worksheet('Cost_Timeline')
-        
-        # Enhanced formatting for professional appearance
-        worksheet.set_column('A:A', 25)  # Component names
-        worksheet.set_column('B:M', 15)  # Cost columns
-        
-        # Title and headers - referencing Input Parameters sheet
-        worksheet.merge_range('A1:M1', 'DYNAMIC Cost Breakdown Timeline (Updates from Input_Parameters)', formats['header'])
-        worksheet.write_string(2, 0, 'WACC Rate (from Input_Parameters):', formats['text_bold'])
-        worksheet.write_formula(2, 1, f'=Input_Parameters!{self.param_cells["wacc"]}', formats['percent'])
-        
-        # Use the tracked cell references from Input Parameters sheet
-        useful_life_ref = f'Input_Parameters!{self.param_cells["useful_life"]}'
-        wacc_ref = f'Input_Parameters!{self.param_cells["wacc"]}'
-        misc_costs_ref = f'Input_Parameters!{self.param_cells["misc_costs"]}'
-        capex_ref = f'Input_Parameters!{self.param_cells["capex"]}'
-        maint_opex_ref = f'Input_Parameters!{self.param_cells["maint_opex"]}'
-        
-        # Buy option references
-        product_price_ref = f'Input_Parameters!{self.param_cells["product_price"]}'
-        subscription_ref = f'Input_Parameters!{self.param_cells["subscription_price"]}'
-        sub_increase_ref = f'Input_Parameters!{self.param_cells["subscription_increase"]}'
-        
-        # Key calculated values from Input Parameters
-        total_fte_ref = f'Input_Parameters!{self.param_cells["total_fte_cost"]}'
-        capitalized_ref = f'Input_Parameters!{self.param_cells["capitalized_labor"]}'
-        expensed_ref = f'Input_Parameters!{self.param_cells["expensed_labor"]}'
-        tax_credit_ref = f'Input_Parameters!{self.param_cells["tax_credit"]}'
-        
-        # Headers for detailed breakdown
+        """Create comprehensive cost breakdown timeline with WACC discounting and amortization support."""
+        ws = workbook.add_worksheet(self.TIMELINE_SHEET)
+        ws.set_column('A:A', 25)
+        ws.set_column('B:Z', 15)
+
+        ws.merge_range('A1:M1', f'Cost Breakdown Timeline (updates from {self.INPUT_SHEET})', formats['header'])
+        ws.write_string(2, 0, f'WACC Rate (from {self.INPUT_SHEET}):', formats['text_bold'])
+        ws.write_formula(2, 1, f"='{self.INPUT_SHEET}'!{self.param_cells['wacc']}", formats['percent'])
+
+        # Core parameter references
+        useful_life = int(max(1, safe_float(scenario_data.get('useful_life', 5))))
+        max_years = max(useful_life, 5)
+        useful_life_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['useful_life']}"
+        wacc_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['wacc']}"
+        misc_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['misc_costs']}"
+        capex_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['capex']}"
+        maint_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['maint_opex']}"
+        fte_exp_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['expensed_labor']}"
+        fte_cap_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['capitalized_labor']}"
+        tax_credit_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['tax_credit']}"
+        product_price_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['product_price']}"
+        subscription_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['subscription_price']}"
+        sub_increase_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['subscription_increase']}"
+        build_timeline_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['build_timeline']}"
+        amort_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['amortization']}"
+
         row = 4
-        worksheet.merge_range(row, 0, row, 12, 'BUILD OPTION - Cost Components (Dynamic)', formats['subheader'])
+        ws.merge_range(row, 0, row, 12, 'BUILD OPTION - Cost Components', formats['subheader'])
         row += 1
-        
-        # Dynamic column headers based on useful life
-        useful_life = safe_float(scenario_data.get('useful_life', 5))
-        max_years = max(int(useful_life), 5)  # Show at least 5 years for consistency
-        
-        headers = ['Cost Component', 'Year 0']
-        for year in range(1, max_years + 1):
-            headers.append(f'Year {year}')
-        headers.extend(['Nominal Total', 'PV Factor', 'Present Value', 'Cost Type', 'Notes'])
-        
-        for col, header in enumerate(headers):
-            worksheet.write_string(row, col, header, formats['text_bold'])
-        
-        build_start_row = row + 1
+
+        headers = ['Cost Component', 'Year 0'] + [f'Year {y}' for y in range(1, max_years + 1)] + ['Nominal Total', 'PV Factor', 'Present Value', 'Type', 'Notes']
+        for col, h in enumerate(headers):
+            ws.write_string(row, col, h, formats['text_bold'])
         row += 1
-        
-        # BUILD COST COMPONENTS - using formulas that reference Input Parameters
+        build_start = row
+
         build_components = [
-            ('FTE Labor Costs (Expensed)', expensed_ref, 'OpEx', 'Development team costs (expensed portion)'),
-            ('FTE Labor Costs (Capitalized)', capitalized_ref, 'CapEx', 'Development team costs (capitalized for tax purposes)'),
-            ('Miscellaneous Costs', misc_costs_ref, 'OpEx', 'Additional development expenses'),
-            ('Infrastructure CapEx', capex_ref, 'CapEx', 'Hardware and infrastructure investment'),
-            ('Ongoing Maintenance', maint_opex_ref, 'OpEx', 'Annual maintenance and support costs'),
-            ('R&D Tax Credit (Benefit)', f'=-{tax_credit_ref}', 'Benefit', 'Tax credit reduces overall cost')
+            ('FTE Labor Costs (Expensed)', fte_exp_ref, 'OpEx', 'Development team costs (expensed) - success adjusted', 'labor'),
+            ('FTE Labor Costs (Capitalized)', fte_cap_ref, 'CapEx', 'Development team costs (capitalized) - success adjusted', 'labor'),
+            ('Amortization (Monthly)', amort_ref, 'OpEx', 'Monthly amortization during build phase', 'amort'),
+            ('Miscellaneous Costs', misc_ref, 'OpEx', 'Additional development expenses', 'immediate'),
+            ('Infrastructure CapEx', capex_ref, 'CapEx', 'Hardware/infrastructure investment', 'immediate'),
+            ('Ongoing Maintenance', maint_ref, 'OpEx', 'Annual maintenance/support', 'maintenance'),
+            ('R&D Tax Credit (Benefit)', f'=-{tax_credit_ref}', 'Benefit', 'Tax credit benefit', 'immediate')
         ]
-        
-        for component, cost_formula, cost_type, notes in build_components:
-            worksheet.write_string(row, 0, component, formats['text'])
-            
-            # Year 0 cost (most components start here)
-            if 'Ongoing Maintenance' in component:
-                worksheet.write_string(row, 1, '-', formats['text'])  # No maintenance in Year 0
-            else:
-                worksheet.write_formula(row, 1, cost_formula, formats['currency'])
-            
-            # Years 1 through useful life for ongoing maintenance
-            year_end_col = 1 + max_years  # Adjust based on actual number of years
-            for year_col in range(2, year_end_col + 1):  # Start from Year 1
-                if 'Ongoing Maintenance' in component:
-                    # Maintenance starts Year 1, continues through useful life - handle zero maintenance
-                    year_num = year_col - 1  # Convert to 1-based year
-                    maintenance_formula = f'=IF(AND({year_num}>=1,{year_num}<={useful_life_ref},{maint_opex_ref}>0),{maint_opex_ref},0)'
-                    worksheet.write_formula(row, year_col, maintenance_formula, formats['currency'])
-                else:
-                    worksheet.write_string(row, year_col, '-', formats['text'])
-            
-            # Nominal Total (sum of all years) - dynamic range
-            total_col = year_end_col + 1
-            total_formula = f'=SUM(B{row+1}:{chr(66 + year_end_col - 1)}{row+1})'
-            worksheet.write_formula(row, total_col, total_formula, formats['currency_bold'])
-            
-            # PV Factor and Present Value - with error handling
+        # Columns for yearly allocation (Year 0 + subsequent years)
+        last_year_col = 1 + max_years
+        # Track component PV cell references for reconciliation
+        self.component_pv_refs = {}
+
+        for name, formula_ref, ctype, notes, timing in build_components:
+            ws.write_string(row, 0, name, formats['text'])
+            timeline_months = safe_float(scenario_data.get('build_timeline', 12))
+
+            if timing in ('labor', 'amort'):
+                # Allocate labor/amortization proportionally across build timeline months
+                for yc in range(1, last_year_col + 1):
+                    year_index = yc - 1
+                    start_m = year_index * 12
+                    end_m = (year_index + 1) * 12
+                    overlap = max(0, min(timeline_months, end_m) - start_m)
+                    if overlap > 0:
+                        ws.write_formula(row, yc, f'={formula_ref}*{overlap}/{build_timeline_ref}', formats['currency'])
+                    else:
+                        ws.write_string(row, yc, '-', formats['text'])
+            elif timing == 'maintenance':
+                ws.write_string(row, 1, '-', formats['text'])
+                for yc in range(2, last_year_col + 1):
+                    year_index = yc - 1
+                    ws.write_formula(row, yc, f'=IF(AND({year_index}>=1,{year_index}<={useful_life_ref},{maint_ref}>0),{maint_ref},0)', formats['currency'])
+            else:  # immediate
+                ws.write_formula(row, 1, formula_ref, formats['currency'])
+                for yc in range(2, last_year_col + 1):
+                    ws.write_string(row, yc, '-', formats['text'])
+
+            # Totals and PV
+            total_col = last_year_col + 1
             pv_factor_col = total_col + 1
             pv_col = pv_factor_col + 1
-            
-            if 'Ongoing Maintenance' in component:
-                # Multi-year maintenance PV - dynamic calculation based on useful life
+            type_col = pv_col + 1
+            notes_col = type_col + 1
+            last_year_letter = chr(65 + last_year_col)
+            ws.write_formula(row, total_col, f'=SUM(B{row+1}:{last_year_letter}{row+1})', formats['currency_bold'])
+
+            if timing == 'maintenance':
+                pv_terms = '+'.join([f'{maint_ref}/(1+{wacc_ref})^{y}' for y in range(1, useful_life + 1)])
+                ws.write_formula(row, pv_col, f'=IF({maint_ref}=0,0,{pv_terms})', formats['currency_bold'])
+                ws.write_formula(row, pv_factor_col, f'=IF({chr(65+total_col)}{row+1}=0,0,{chr(65+pv_col)}{row+1}/{chr(65+total_col)}{row+1})', formats['number'])
+            elif timing in ('labor', 'amort'):
+                # For labor/amortization: if all costs are in Year 0, treat as immediate (no discounting)
+                # Otherwise apply mid-year discounting for portions in future years
                 pv_terms = []
-                for year in range(1, int(useful_life) + 1):
-                    pv_terms.append(f'{maint_opex_ref}/(1+{wacc_ref})^{year}')
+                all_in_year_zero = True
+                for yc in range(1, last_year_col + 1):
+                    year_index = yc - 1
+                    start_m = year_index * 12
+                    end_m = (year_index + 1) * 12
+                    overlap = max(0, min(timeline_months, end_m) - start_m)
+                    if overlap > 0:
+                        if year_index > 0:  # Future years beyond Year 0
+                            all_in_year_zero = False
+                            discount_exp = f"{year_index}+({overlap}/12)/2"
+                            pv_terms.append(f'({formula_ref}*{overlap}/{build_timeline_ref})/((1+{wacc_ref})^{discount_exp})')
+                        else:  # Year 0 - no discounting
+                            pv_terms.append(f'({formula_ref}*{overlap}/{build_timeline_ref})')
                 
-                pv_formula = f'=IF({maint_opex_ref}=0,0,{"+".join(pv_terms)})'
-                worksheet.write_formula(row, pv_col, pv_formula, formats['currency_bold'])
-                # PV Factor = PV / Nominal Total (with zero protection)
-                pv_factor_formula = f'=IF({chr(65 + total_col)}{row+1}=0,0,{chr(65 + pv_col)}{row+1}/{chr(65 + total_col)}{row+1})'
-                worksheet.write_formula(row, pv_factor_col, pv_factor_formula, formats['number'])
-            else:
-                # One-time costs in Year 0
-                worksheet.write_formula(row, pv_factor_col, '=1', formats['number'])  # Year 0 PV factor = 1
-                worksheet.write_formula(row, pv_col, f'={chr(65 + total_col)}{row+1}', formats['currency_bold'])
-            
-            # Cost Type and Notes
-            cost_type_col = pv_col + 1
-            notes_col = cost_type_col + 1
-            worksheet.write_string(row, cost_type_col, cost_type, formats['text'])
-            worksheet.write_string(row, notes_col, notes, formats['text'])
-            row += 1
-        
-        build_end_row = row - 1
-        
-        # BUILD SECTION TOTAL - right within the build section
-        row += 1
-        worksheet.write_string(row, 0, 'TOTAL BUILD COSTS (Present Value)', formats['text_bold'])
-        # Sum all the present values in the build section
-        build_section_total_formula = f'=SUM({chr(65 + pv_col)}{build_start_row + 1}:{chr(65 + pv_col)}{build_end_row + 1})'
-        worksheet.write_formula(row, pv_col, build_section_total_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Excel formula - may differ from simulation', formats['text'])
-        
-        # BUY OPTION COMPONENTS
-        row += 2
-        worksheet.merge_range(row, 0, row, notes_col, 'BUY OPTION - Cost Components (Dynamic)', formats['subheader'])
-        buy_start_row = row + 1
-        row += 1
-        
-        buy_components = [
-            ('One-Time Purchase', product_price_ref, 'CapEx', 'Software license purchase'),
-            ('Annual Subscription (All Years)', 'subscription_all_years', 'OpEx', 'Multi-year subscription with escalation')
-        ]
-        
-        for component, cost_ref, cost_type, notes in buy_components:
-            worksheet.write_string(row, 0, component, formats['text'])
-            
-            if component == 'One-Time Purchase':
-                # One-time purchase in Year 0 - handle zero purchase price
-                worksheet.write_formula(row, 1, f'=IF({cost_ref}>0,{cost_ref},0)', formats['currency'])
-                for year_col in range(2, year_end_col + 1):
-                    worksheet.write_string(row, year_col, '-', formats['text'])
-                    
-            else:  # Multi-year subscription across useful life
-                # Year 0 - no subscription (annual subscriptions start in Year 1)
-                worksheet.write_string(row, 1, '-', formats['text'])
-                # Years 1 through useful life with escalation
-                for year_col in range(2, year_end_col + 1):  # Dynamic year range
-                    year_num = year_col - 1  # This gives us years 1, 2, 3, etc.
-                    # Only charge subscription during useful life period
-                    escalated_formula = f'=IF(AND({subscription_ref}>0,{year_num}<={useful_life_ref}),{subscription_ref}*((1+{sub_increase_ref})^{year_num}),0)'
-                    worksheet.write_formula(row, year_col, escalated_formula, formats['currency'])
-            
-            # Nominal Total and PV calculations - using dynamic columns
-            total_formula = f'=SUM(B{row+1}:{chr(66 + year_end_col - 1)}{row+1})'
-            worksheet.write_formula(row, total_col, total_formula, formats['currency_bold'])
-            
-            # PV Factor and Present Value - with error handling
-            if 'One-Time' in component:
-                worksheet.write_formula(row, pv_factor_col, '=1', formats['number'])  # Year 0 PV factor
-                worksheet.write_formula(row, pv_col, f'={chr(65 + total_col)}{row+1}', formats['currency_bold'])
-            else:
-                # Multi-year subscription PV - dynamic calculation based on useful life
-                pv_terms = []
-                for year in range(1, int(useful_life) + 1):
-                    year_col_letter = chr(66 + year)  # C, D, E, F, etc.
-                    pv_terms.append(f'{year_col_letter}{row+1}/(1+{wacc_ref})^{year}')
-                
-                pv_formula = f'=IF({subscription_ref}=0,0,{"+".join(pv_terms)})'
-                worksheet.write_formula(row, pv_col, pv_formula, formats['currency_bold'])
-                # PV Factor = PV / Nominal Total (with zero protection)
-                pv_factor_formula = f'=IF({chr(65 + total_col)}{row+1}=0,0,{chr(65 + pv_col)}{row+1}/{chr(65 + total_col)}{row+1})'
-                worksheet.write_formula(row, pv_factor_col, pv_factor_formula, formats['number'])
-            
-            worksheet.write_string(row, cost_type_col, cost_type, formats['text'])
-            worksheet.write_string(row, notes_col, notes, formats['text'])
-            row += 1
-        
-        buy_end_row = row - 1
-        
-        # BUY SECTION TOTAL - right within the buy section  
-        row += 1
-        worksheet.write_string(row, 0, 'TOTAL BUY COSTS (Present Value)', formats['text_bold'])
-        # Sum all the present values in the buy section
-        buy_section_total_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row + 1}:{chr(65 + pv_col)}{buy_end_row + 1})'
-        worksheet.write_formula(row, pv_col, buy_section_total_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Excel formula - may differ from simulation', formats['text'])
-        
-        # SUMMARY TOTALS - Excel formulas with simulation validation
-        row += 2
-        worksheet.merge_range(row, 0, row, notes_col, 'SUMMARY TOTALS (Dynamic Excel Formulas)', formats['subheader'])
-        row += 1
-        
-        # Build Option Summary - uses Excel SUM formula for full dynamism  
-        worksheet.write_string(row, 0, 'BUILD OPTION - Base Cost (Pre-Risk)', formats['text_bold'])
-        build_pv_formula = f'=SUM({chr(65 + pv_col)}{build_start_row + 1}:{chr(65 + pv_col)}{build_end_row + 1})'
-        worksheet.write_formula(row, pv_col, build_pv_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Base build cost before risk adjustments', formats['text'])
-        build_base_row = row + 1  # Store base build total row reference
-        row += 1
-        
-        # Risk-Adjusted Build Total (NEW - this matches simulation methodology)
-        worksheet.write_string(row, 0, 'BUILD OPTION - Risk-Adjusted Total', formats['text_bold'])
-        # Apply risk factors to the base build total
-        tech_risk_ref = f'Input_Parameters!{self.param_cells["tech_risk"]}'
-        vendor_risk_ref = f'Input_Parameters!{self.param_cells["vendor_risk"]}'
-        market_risk_ref = f'Input_Parameters!{self.param_cells["market_risk"]}'
-        risk_adjusted_formula = f'={chr(65 + pv_col)}{build_base_row}*(1+{tech_risk_ref})*(1+{vendor_risk_ref})*(1+{market_risk_ref})'
-        worksheet.write_formula(row, pv_col, risk_adjusted_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Build cost with technical, vendor, and market risk adjustments (includes tax credit)', formats['text'])
-        row += 1
-        
-        # Simulation-Matched Build Total (excludes tax credits to match simulation)
-        worksheet.write_string(row, 0, 'BUILD OPTION - Simulation-Matched Total', formats['text_bold'])
-        # Apply risk factors to base total PLUS tax credit (to exclude tax credit benefit)
-        tax_credit_ref = f'Input_Parameters!{self.param_cells["tax_credit"]}'
-        sim_matched_formula = f'=({chr(65 + pv_col)}{build_base_row}+{tax_credit_ref})*(1+{tech_risk_ref})*(1+{vendor_risk_ref})*(1+{market_risk_ref})'
-        worksheet.write_formula(row, pv_col, sim_matched_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Build cost excluding tax credits to match simulation methodology', formats['text'])
-        self.build_total_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
-        row += 1
-        
-        # Buy Option Summary - uses Excel SUM formula for full dynamism
-        worksheet.write_string(row, 0, 'BUY OPTION - Total Present Value', formats['text_bold'])
-        buy_pv_formula = f'=SUM({chr(65 + pv_col)}{buy_start_row + 1}:{chr(65 + pv_col)}{buy_end_row + 1})'
-        worksheet.write_formula(row, pv_col, buy_pv_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Dynamic Excel formula (user can modify parameters)', formats['text'])
-        self.buy_total_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
-        row += 1
-        
-        # NPV Difference - calculated dynamically
-        worksheet.write_string(row, 0, 'NET PRESENT VALUE DIFFERENCE (Build - Buy)', formats['text_bold'])
-        npv_diff_formula = f'={chr(65 + pv_col)}{self.build_total_row}-{chr(65 + pv_col)}{self.buy_total_row}'
-        worksheet.write_formula(row, pv_col, npv_diff_formula, formats['currency_bold'])
-        worksheet.write_string(row, notes_col, 'Negative favors BUILD, positive favors BUY', formats['text'])
-        self.npv_diff_row = row + 1  # Store for executive summary reference (1-indexed for Excel)
-        row += 1
-        
-        # Add simulation verification section if results are available
-        simulation_results = scenario_data.get('results', {})
-        if simulation_results and 'expected_build_cost' in simulation_results:
-            row += 1
-            worksheet.merge_range(row, 0, row, notes_col, 'SIMULATION VALIDATION (for verification only)', formats['subheader'])
-            row += 1
-            
-            worksheet.write_string(row, 0, 'Simulation Build Cost:', formats['text'])
-            worksheet.write_number(row, pv_col, simulation_results['expected_build_cost'], formats['currency'])
-            worksheet.write_string(row, notes_col, f'Monte Carlo result: ${simulation_results["expected_build_cost"]:,.0f}', formats['text'])
-            row += 1
-            
-            worksheet.write_string(row, 0, 'Excel vs Simulation Difference:', formats['text'])
-            diff_formula = f'={chr(65 + pv_col)}{self.build_total_row}-{chr(65 + pv_col)}{row}'
-            worksheet.write_formula(row, pv_col, diff_formula, formats['currency'])
-            worksheet.write_string(row, notes_col, 'Should be close to $0 if methodologies match', formats['text'])
-        
-        # Key insights section
-        row += 2
-        worksheet.merge_range(row, 0, row, 12, 'KEY INSIGHTS', formats['subheader'])
-        row += 1
-        
-        insights = [
-            "• Excel formulas are FULLY DYNAMIC - modify Input_Parameters to see results update instantly",
-            "• All calculations use proper present value discounting with WACC",
-            "• Excel uses deterministic calculations; simulation adds Monte Carlo uncertainty",
-            "• Small differences between Excel and simulation are normal and expected",
-            "• Labor costs are discounted based on build timeline duration", 
-            "• Tax credit benefits are automatically calculated on capitalized labor",
-            "• Risk factors are applied as multiplicative adjustments to base costs",
-            "• Users can freely modify any input parameter and see immediate updates"
-        ]
-        
-        for insight in insights:
-            worksheet.write_string(row, 0, insight, formats['text'])
+                if all_in_year_zero:
+                    # All costs in Year 0 - treat as immediate with no discounting
+                    ws.write_formula(row, pv_factor_col, '=1', formats['number'])
+                    ws.write_formula(row, pv_col, f'={chr(65+total_col)}{row+1}', formats['currency_bold'])
+                else:
+                    # Mixed timing - use calculated PV terms
+                    ws.write_formula(row, pv_col, f'={"+".join(pv_terms) if pv_terms else 0}', formats['currency_bold'])
+                    ws.write_formula(row, pv_factor_col, f'=IF({chr(65+total_col)}{row+1}=0,0,{chr(65+pv_col)}{row+1}/{chr(65+total_col)}{row+1})', formats['number'])
+            else:  # immediate
+                ws.write_formula(row, pv_factor_col, '=1', formats['number'])
+                ws.write_formula(row, pv_col, f'={chr(65+total_col)}{row+1}', formats['currency_bold'])
+
+            ws.write_string(row, type_col, ctype, formats['text'])
+            ws.write_string(row, notes_col, notes, formats['text'])
+
+            # Store PV cell reference for reconciliation sheet
+            pv_cell_ref = f"{chr(65+pv_col)}{row+1}"
+            key = name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
+            self.component_pv_refs[key] = pv_cell_ref
             row += 1
 
+        build_end = row - 1
+        pv_col_index = last_year_col + 3  # aligned with header layout
+        self.pv_col_letter = chr(65 + pv_col_index)
+        notes_col_index = pv_col_index + 2
+        ws.write_string(row, 0, 'TOTAL BUILD COSTS (Present Value)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'=SUM({chr(65+pv_col_index)}{build_start+1}:{chr(65+pv_col_index)}{build_end+1})', formats['currency_bold'])
+        ws.write_string(row, notes_col_index, 'Excel formula - may differ from simulation', formats['text'])
+        row += 2
+
+        # BUY OPTION SECTION
+        ws.merge_range(row, 0, row, notes_col_index, 'BUY OPTION - Cost Components', formats['subheader'])
+        row += 1
+        buy_start = row
+        buy_components = [
+            ('One-Time Purchase', product_price_ref, 'CapEx', 'License purchase'),
+            ('Annual Subscription', subscription_ref, 'OpEx', 'Subscription with escalation')
+        ]
+        for name, ref, ctype, notes in buy_components:
+            ws.write_string(row, 0, name, formats['text'])
+            if name.startswith('One-Time'):
+                ws.write_formula(row, 1, f'=IF({ref}>0,{ref},0)', formats['currency'])
+                for yc in range(2, last_year_col + 1):
+                    ws.write_string(row, yc, '-', formats['text'])
+            else:
+                ws.write_string(row, 1, '-', formats['text'])
+                for yc in range(2, last_year_col + 1):
+                    year_index = yc - 1
+                    ws.write_formula(row, yc, f'=IF(AND({ref}>0,{year_index}<={useful_life_ref}),{ref}*((1+{sub_increase_ref})^{year_index}),0)', formats['currency'])
+            total_col = last_year_col + 1
+            pv_factor_col = total_col + 1
+            pv_col = pv_factor_col + 1
+            type_col = pv_col + 1
+            notes_col = type_col + 1
+            last_year_letter = chr(65 + last_year_col)
+            ws.write_formula(row, total_col, f'=SUM(B{row+1}:{last_year_letter}{row+1})', formats['currency_bold'])
+            if name.startswith('One-Time'):
+                ws.write_formula(row, pv_factor_col, '=1', formats['number'])
+                ws.write_formula(row, pv_col, f'={chr(65+total_col)}{row+1}', formats['currency_bold'])
+            else:
+                pv_terms = '+'.join([f'{chr(66+y)}{row+1}/(1+{wacc_ref})^{y}' for y in range(1, useful_life + 1)])
+                ws.write_formula(row, pv_col, f'=IF({ref}=0,0,{pv_terms})', formats['currency_bold'])
+                ws.write_formula(row, pv_factor_col, f'=IF({chr(65+total_col)}{row+1}=0,0,{chr(65+pv_col)}{row+1}/{chr(65+total_col)}{row+1})', formats['number'])
+            ws.write_string(row, type_col, ctype, formats['text'])
+            ws.write_string(row, notes_col, notes, formats['text'])
+            row += 1
+        buy_end = row - 1
+        ws.write_string(row, 0, 'TOTAL BUY COSTS (Present Value)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'=SUM({chr(65+pv_col_index)}{buy_start+1}:{chr(65+pv_col_index)}{buy_end+1})', formats['currency_bold'])
+        ws.write_string(row, notes_col_index, 'Excel formula - may differ from simulation', formats['text'])
+        row += 2
+
+        # SUMMARY SECTION
+        ws.merge_range(row, 0, row, notes_col_index, 'SUMMARY TOTALS', formats['subheader'])
+        row += 1
+        ws.write_string(row, 0, 'BUILD OPTION - Base Cost (Pre-Risk)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'=SUM({chr(65+pv_col_index)}{build_start+1}:{chr(65+pv_col_index)}{build_end+1})', formats['currency_bold'])
+        build_base_row = row + 1
+        row += 1
+        tech_risk_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['tech_risk']}"
+        vendor_risk_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['vendor_risk']}"
+        market_risk_ref = f"'{self.INPUT_SHEET}'!{self.param_cells['market_risk']}"
+        ws.write_string(row, 0, 'BUILD OPTION - Excel Risk Model (Multiplicative)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'={chr(65+pv_col_index)}{build_base_row}*(1+{tech_risk_ref})*(1+{vendor_risk_ref})*(1+{market_risk_ref})', formats['currency_bold'])
+        row += 1
+        ws.write_string(row, 0, 'BUILD OPTION - Simulation Risk Model (Additive)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'={chr(65+pv_col_index)}{build_base_row}*(1+{tech_risk_ref}+{vendor_risk_ref}+{market_risk_ref})', formats['currency_bold'])
+        self.build_total_row = row + 1
+        row += 1
+        ws.write_string(row, 0, 'BUY OPTION - Total Present Value', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'=SUM({chr(65+pv_col_index)}{buy_start+1}:{chr(65+pv_col_index)}{buy_end+1})', formats['currency_bold'])
+        self.buy_total_row = row + 1
+        row += 1
+        ws.write_string(row, 0, 'NET PRESENT VALUE DIFFERENCE (Build - Buy)', formats['text_bold'])
+        ws.write_formula(row, pv_col_index, f'={chr(65+pv_col_index)}{self.build_total_row}-{chr(65+pv_col_index)}{self.buy_total_row}', formats['currency_bold'])
+        self.npv_diff_row = row + 1
+
+        # INSIGHTS
+        row += 2
+        ws.merge_range(row, 0, row, 12, 'KEY INSIGHTS', formats['subheader'])
+        row += 1
+        for text in [
+            '• Formulas dynamically reference Input Parameters',
+            '• Proper PV discounting by year using WACC',
+            '• Labor & amortization costs allocated by timeline with refined partial-year discounting',
+            '• Risk factors applied multiplicatively',
+            '• Users can modify inputs to see instant updates'
+        ]:
+            ws.write_string(row, 0, text, formats['text'])
+            row += 1
+
+        # Create reconciliation sheet for PV vs Simulation alignment
+        self._create_reconciliation_sheet(workbook, formats)
+
+    def _create_reconciliation_sheet(self, workbook, formats):
+        """Add a reconciliation sheet quantifying Excel vs simulation PV differences."""
+        try:
+            ws = workbook.add_worksheet('Reconciliation')
+            ws.set_column('A:A', 38)
+            ws.set_column('B:D', 22)
+            ws.merge_range('A1:D1', 'PV RECONCILIATION (Excel vs Simulation Logic)', formats['header'])
+            row = 3
+            
+            # References - use safer fallbacks
+            wacc_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('wacc', 'B8')}"
+            timeline_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('build_timeline', 'B2')}"
+            total_fte_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('total_fte_cost', 'B20')}"
+            prob_success_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('prob_success', 'B7')}"
+            tech_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('tech_risk', 'B11')}"
+            vendor_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('vendor_risk', 'B12')}"
+            market_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('market_risk', 'B13')}"
+            pv_col = self.pv_col_letter or 'J'
+            
+            # Current Excel labor PV (expensed + capitalized)
+            labor_exp_pv = self.component_pv_refs.get('fte_labor_costs_expensed')
+            labor_cap_pv = self.component_pv_refs.get('fte_labor_costs_capitalized')
+            
+            # LABOR PV RECONCILIATION
+            ws.merge_range(row, 0, row, 3, 'LABOR PV RECONCILIATION', formats['subheader'])
+            row += 1
+            
+            if labor_exp_pv and labor_cap_pv:
+                ws.write_string(row, 0, 'Current Excel Labor PV (Exp+Cap)', formats['text_bold'])
+                ws.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{labor_exp_pv}+'{self.TIMELINE_SHEET}'!{labor_cap_pv}", formats['currency_bold'])
+                row += 1
+            
+            # Simplified simulation-style labor PV calculation (no complex LET functions)
+            ws.write_string(row, 0, 'Simulation Labor PV (Mid-year discount)', formats['text_bold'])
+            # For 12 months: Cost / (1+WACC)^0.5, success-adjusted
+            ws.write_formula(row, 1, f'={total_fte_ref}/((1+{wacc_ref})^0.5)', formats['currency'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Labor PV Delta (Sim - Excel)', formats['text_bold'])
+            ws.write_formula(row, 1, f'=B{row}-B{row-1}', formats['currency'])
+            row += 2
+            
+            # PROBABILITY OF SUCCESS
+            ws.merge_range(row, 0, row, 3, 'SUCCESS PROBABILITY ADJUSTMENT', formats['subheader'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Probability of Success Factor', formats['text_bold'])
+            ws.write_formula(row, 1, prob_success_ref, formats['percent'])
+            ws.write_string(row, 2, 'Used to adjust costs upward for risk', formats['text'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Success Adjustment Note', formats['text_bold'])
+            ws.write_string(row, 1, 'Excel: Included in Total FTE Cost calculation', formats['text'])
+            row += 1
+            
+            ws.write_string(row, 0, '', formats['text'])
+            ws.write_string(row, 1, 'Simulation: Applied to base labor costs', formats['text'])
+            row += 2
+            
+            # RISK MODELING COMPARISON
+            ws.merge_range(row, 0, row, 3, 'RISK MODELING COMPARISON', formats['subheader'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Excel Risk Multiplier (Compounded)', formats['text_bold'])
+            ws.write_formula(row, 1, f'=(1+{tech_ref})*(1+{vendor_ref})*(1+{market_ref})', formats['number'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Simulation Risk Multiplier (Additive)', formats['text_bold'])
+            ws.write_formula(row, 1, f'=1+{tech_ref}+{vendor_ref}+{market_ref}', formats['number'])
+            row += 1
+            
+            ws.write_string(row, 0, 'Risk Modeling Delta', formats['text_bold'])
+            ws.write_formula(row, 1, f'=B{row-2}-B{row-1}', formats['number'])
+            row += 2
+            
+            # BUILD TOTAL COMPARISON
+            if self.build_total_row:
+                ws.merge_range(row, 0, row, 3, 'BUILD TOTAL COMPARISON', formats['subheader'])
+                row += 1
+                
+                ws.write_string(row, 0, 'Excel Build Total (Risk-Adjusted)', formats['text_bold'])
+                ws.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.build_total_row}", formats['currency_bold'])
+                row += 1
+                
+                ws.write_string(row, 0, 'Key Differences', formats['text_bold'])
+                ws.write_string(row, 1, '1. Labor PV timing', formats['text'])
+                row += 1
+                
+                ws.write_string(row, 0, '', formats['text'])
+                ws.write_string(row, 1, '2. Risk compounding vs additive', formats['text'])
+                row += 1
+                
+                ws.write_string(row, 0, '', formats['text'])
+                ws.write_string(row, 1, '3. Monte Carlo uncertainty in simulation', formats['text'])
+                row += 1
+            
+        except Exception as e:
+            # If reconciliation fails, don't break the entire export
+            pass
+
     def _create_executive_summary(self, workbook, formats, scenario_data):
-        """Create comprehensive executive summary with key metrics and recommendations."""
+        """Create executive summary that pulls from Cost Timeline sheet."""
         worksheet = workbook.add_worksheet('Executive_Summary')
-        
-        # Enhanced formatting for executive presentation
+
         worksheet.set_column('A:A', 30)
         worksheet.set_column('B:B', 20)
         worksheet.set_column('C:C', 25)
-        
-        # Header and title section
+
         worksheet.merge_range('A1:C1', 'BUILD vs BUY ANALYSIS - EXECUTIVE SUMMARY', formats['header'])
-        
-        # Key results section using simulation-matched Excel formulas
+
         row = 3
-        
-        # Create intermediate calculation references
+        pv_col = self.pv_col_letter or 'J'  # fallback
         worksheet.write_string(row, 0, 'Build Option Total Cost:', formats['text_bold'])
-        worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.build_total_row}', formats['currency_bold'])
+        if self.build_total_row:
+            worksheet.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.build_total_row}", formats['currency_bold'])
         worksheet.write_string(row, 2, '(Excel formula matches simulation logic)', formats['text'])
         row += 1
-        
+
         worksheet.write_string(row, 0, 'Buy Option Total Cost:', formats['text_bold'])
-        worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.buy_total_row}', formats['currency_bold'])
+        if self.buy_total_row:
+            worksheet.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.buy_total_row}", formats['currency_bold'])
         worksheet.write_string(row, 2, '(Excel formula matches simulation logic)', formats['text'])
         row += 1
-        
+
         worksheet.write_string(row, 0, 'NPV Difference (Build - Buy):', formats['text_bold'])
-        worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.npv_diff_row}', formats['currency_bold'])
+        if self.npv_diff_row:
+            worksheet.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.npv_diff_row}", formats['currency_bold'])
         worksheet.write_string(row, 2, 'Negative = Build preferred', formats['text'])
         row += 1
-        
+
         worksheet.write_string(row, 0, 'RECOMMENDATION:', formats['text_bold'])
-        worksheet.write_formula(row, 1, f'=IF(Cost_Timeline!J{self.npv_diff_row}<0,"BUILD","BUY")', formats['text_bold'])
+        if self.npv_diff_row:
+            worksheet.write_formula(row, 1, f"=IF('{self.TIMELINE_SHEET}'!{pv_col}{self.npv_diff_row}<0,'BUILD','BUY')", formats['text_bold'])
         worksheet.write_string(row, 2, 'Based on financial analysis (fully dynamic)', formats['text'])
-        
-        # Add simulation verification section
+
+        # Simulation verification
         row += 2
-        simulation_results = self.scenario_data.get('simulation_results', {})
+        simulation_results = self.scenario_data.get('simulation_results', {}) if hasattr(self, 'scenario_data') else {}
         if simulation_results:
             worksheet.merge_range(f'A{row}:C{row}', 'SIMULATION VERIFICATION (for validation only)', formats['subheader'])
             row += 1
-            
             worksheet.write_string(row, 0, 'Simulation Expected Build Cost:', formats['text'])
             worksheet.write_number(row, 1, simulation_results.get('expected_build_cost', 0), formats['currency'])
             worksheet.write_string(row, 2, 'Monte Carlo result', formats['text'])
             row += 1
-            
             worksheet.write_string(row, 0, 'Formula vs Simulation Difference:', formats['text'])
-            formula_diff = f'=B{row-3}-B{row}'  # Excel total - simulation total
-            worksheet.write_formula(row, 1, formula_diff, formats['currency'])
+            worksheet.write_formula(row, 1, f'=B{row-2}-B{row}', formats['currency'])
             worksheet.write_string(row, 2, 'Should be close to $0', formats['text'])
-        row += 2
-        
-        # Key parameters display
-        worksheet.merge_range(f'A{row}:C{row}', 'KEY PARAMETERS (from Input_Parameters)', formats['subheader'])
+            row += 1
         row += 1
-        
-        # Use the tracked cell references
+
+        worksheet.merge_range(f'A{row}:C{row}', f'KEY PARAMETERS (from {self.INPUT_SHEET})', formats['subheader'])
+        row += 1
         params = [
-            ('WACC Rate:', f'Input_Parameters!{self.param_cells["wacc"]}', formats['percent']),
-            ('Build Timeline:', f'Input_Parameters!{self.param_cells["build_timeline"]}', formats['number']),
-            ('Tax Credit Rate:', f'Input_Parameters!{self.param_cells["tax_credit_rate"]}', formats['percent']),
-            ('Estimated Tax Credit:', f'Input_Parameters!{self.param_cells["tax_credit"]}', formats['currency'])
+            ('WACC Rate:', f"'{self.INPUT_SHEET}'!{self.param_cells['wacc']}", formats['percent']),
+            ('Build Timeline:', f"'{self.INPUT_SHEET}'!{self.param_cells['build_timeline']}", formats['number']),
+            ('Tax Credit Rate:', f"'{self.INPUT_SHEET}'!{self.param_cells['tax_credit_rate']}", formats['percent']),
+            ('Estimated Tax Credit:', f"'{self.INPUT_SHEET}'!{self.param_cells['tax_credit']}", formats['currency'])
         ]
-        
-        for param_name, cell_ref, fmt in params:
-            worksheet.write_string(row, 0, param_name, formats['text_bold'])
+        for label, cell_ref, fmt in params:
+            worksheet.write_string(row, 0, label, formats['text_bold'])
             worksheet.write_formula(row, 1, f'={cell_ref}', fmt)
             row += 1
-        
         row += 1
-        worksheet.write_string(row, 0, 'To modify parameters, go to Input_Parameters sheet', formats['text_bold'])
-        worksheet.write_string(row + 1, 0, 'All calculations will update automatically', formats['text'])
+        worksheet.write_string(row, 0, f'To modify parameters, go to {self.INPUT_SHEET} sheet', formats['text_bold'])
+        worksheet.write_string(row + 1, 0, 'All calculations update automatically', formats['text'])
 
     def _create_executive_dashboard(self, workbook, formats, scenario_data):
         """Create enhanced executive dashboard with visual decision support."""
@@ -766,49 +804,70 @@ class ExcelExporter:
         
         # Headers for sensitivity table
         row = 5
-        headers = ['Parameter', '-20% Value', '-20% NPV Diff', 'Base NPV Diff', '+20% NPV Diff', '+20% Value']
+        headers = ['Parameter', '-20% Value', '-20% Impact', 'Base NPV Diff', '+20% Impact', '+20% Value']
         for col, header in enumerate(headers):
             worksheet.write_string(row, col, header, formats['subheader'])
         row += 1
         
-        # Enhanced parameters for sensitivity analysis with dynamic formulas
+        # Use dynamic cell references from param_cells
         sensitive_params = [
-            ('Build Timeline (months)', 'build_timeline', 'Input_Parameters!B4'),
-            ('FTE Annual Cost ($)', 'fte_cost', 'Input_Parameters!B5'),
-            ('Team Size (FTEs)', 'fte_count', 'Input_Parameters!B6'),
-            ('Success Probability (%)', 'prob_success', 'Input_Parameters!B10'),
-            ('WACC Rate (%)', 'wacc', 'Input_Parameters!B11'),
-            ('Subscription Price ($)', 'subscription_price', 'Input_Parameters!B14'),
-            ('Product Price ($)', 'product_price', 'Input_Parameters!B13')
+            ('Build Timeline (months)', 'build_timeline'),
+            ('FTE Annual Cost ($)', 'fte_cost'),
+            ('Team Size (FTEs)', 'fte_count'),
+            ('Success Probability (%)', 'prob_success'),
+            ('WACC Rate (%)', 'wacc'),
+            ('Subscription Price ($)', 'subscription_price'),
+            ('Product Price ($)', 'product_price')
         ]
         
-        for param_name, param_key, excel_ref in sensitive_params:
-            base_value = safe_float(scenario_data.get(param_key, 0))
-            if base_value > 0:  # Only show parameters that have values
-                worksheet.write_string(row, 0, param_name, formats['text_bold'])
+        for param_name, param_key in sensitive_params:
+            if param_key in self.param_cells:
+                excel_ref = f"'{self.INPUT_SHEET}'!{self.param_cells[param_key]}"
+                base_value = safe_float(scenario_data.get(param_key, 0))
                 
-                # -20% value
-                low_formula = f'={excel_ref}*0.8'
-                worksheet.write_formula(row, 1, low_formula, formats['number'])
-                
-                # -20% NPV difference (placeholder - would need complex modeling)
-                worksheet.write_string(row, 2, 'Recalc needed', formats['text'])
-                
-                # Base case NPV difference
-                if self.npv_diff_row:
-                    base_npv_formula = f'=Cost_Timeline!J{self.npv_diff_row}'
-                    worksheet.write_formula(row, 3, base_npv_formula, formats['currency_bold'])
-                else:
-                    worksheet.write_string(row, 3, 'N/A', formats['text'])
-                
-                # +20% NPV difference (placeholder)
-                worksheet.write_string(row, 4, 'Recalc needed', formats['text'])
-                
-                # +20% value
-                high_formula = f'={excel_ref}*1.2'
-                worksheet.write_formula(row, 5, high_formula, formats['number'])
-                
-                row += 1
+                if base_value > 0:  # Only show parameters that have values
+                    worksheet.write_string(row, 0, param_name, formats['text_bold'])
+                    
+                    # -20% value
+                    worksheet.write_formula(row, 1, f'={excel_ref}*0.8', formats['number'])
+                    
+                    # -20% impact description
+                    worksheet.write_string(row, 2, 'Lower parameter value', formats['text'])
+                    
+                    # Base case NPV difference
+                    if self.npv_diff_row and self.pv_col_letter:
+                        base_npv_formula = f"='{self.TIMELINE_SHEET}'!{self.pv_col_letter}{self.npv_diff_row}"
+                        worksheet.write_formula(row, 3, base_npv_formula, formats['currency_bold'])
+                    else:
+                        worksheet.write_string(row, 3, 'Calculate in Cost Timeline', formats['text'])
+                    
+                    # +20% impact description
+                    worksheet.write_string(row, 4, 'Higher parameter value', formats['text'])
+                    
+                    # +20% value
+                    worksheet.write_formula(row, 5, f'={excel_ref}*1.2', formats['number'])
+                    
+                    row += 1
+        
+        row += 2
+        worksheet.merge_range(f'A{row}:F{row}', 'HOW TO PERFORM SENSITIVITY TESTING', formats['subheader'])
+        row += 1
+        
+        worksheet.write_string(row, 0, 'TESTING PROCEDURE:', formats['text_bold'])
+        row += 1
+        instructions = [
+            '1. Note the Base NPV Diff value above',
+            '2. Go to Input Parameters sheet',
+            '3. Change a parameter to its -20% value (shown in column B)',
+            '4. Check how Cost Timeline NPV difference changes',
+            '5. Reset parameter and test +20% value (column F)',
+            '6. Repeat for each critical parameter',
+            '7. Parameters causing largest swings need most attention'
+        ]
+        
+        for instruction in instructions:
+            worksheet.write_string(row, 0, instruction, formats['text'])
+            row += 1
         
         row += 2
         worksheet.merge_range(f'A{row}:F{row}', 'PRACTICAL SENSITIVITY TESTING', formats['subheader'])
@@ -854,7 +913,7 @@ class ExcelExporter:
         
         worksheet.merge_range('A1:D1', 'BREAK-EVEN ANALYSIS - Dynamic Decision Thresholds', formats['header'])
         worksheet.write_string(2, 0, 'Identifies critical thresholds where build vs buy decision changes', formats['text_bold'])
-        worksheet.write_string(3, 0, 'Formulas reference Input_Parameters for real-time updates', formats['text'])
+        worksheet.write_string(3, 0, 'Values update automatically when Input Parameters change', formats['text'])
         
         row = 5
         worksheet.merge_range(f'A{row}:D{row}', 'CRITICAL BREAK-EVEN CALCULATIONS', formats['subheader'])
@@ -866,45 +925,64 @@ class ExcelExporter:
             worksheet.write_string(row, col, header, formats['text_bold'])
         row += 1
         
-        # Dynamic break-even calculations using Excel formulas
+        # Use dynamic cell references
+        timeline_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('build_timeline', 'B2')}"
+        fte_cost_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('fte_cost', 'B3')}"
+        fte_count_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('fte_count', 'B4')}"
+        product_price_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('product_price', 'B5')}"
+        subscription_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('subscription_price', 'B6')}"
+        useful_life_ref = f"'{self.INPUT_SHEET}'!{self.param_cells.get('useful_life', 'B7')}"
+        
+        # Simplified break-even calculations
         breakeven_calcs = [
             (
-                'Timeline Break-Even (months)',
-                '=Input_Parameters!B4',
-                '=IF(Input_Parameters!B13>0,Input_Parameters!B13/(Input_Parameters!B5*Input_Parameters!B6/12),0)',
-                'Max build time before buy becomes cheaper'
+                'Current Build Timeline (months)',
+                timeline_ref,
+                f'=IF({product_price_ref}>0,{product_price_ref}/({fte_cost_ref}*{fte_count_ref}/12),0)',
+                'Timeline where build cost = product price'
             ),
             (
-                'Team Size Break-Even (FTEs)',
-                '=Input_Parameters!B6',
-                '=IF(AND(Input_Parameters!B13>0,Input_Parameters!B5>0),Input_Parameters!B13/(Input_Parameters!B5*Input_Parameters!B4/12),0)',
-                'Max team size before buy becomes cheaper'
+                'Current Team Size (FTEs)',
+                fte_count_ref,
+                f'=IF(AND({product_price_ref}>0,{fte_cost_ref}>0),{product_price_ref}/({fte_cost_ref}*{timeline_ref}/12),0)',
+                'Team size where build cost = product price'
             ),
             (
-                'FTE Cost Break-Even ($)',
-                '=Input_Parameters!B5',
-                '=IF(AND(Input_Parameters!B13>0,Input_Parameters!B6>0),Input_Parameters!B13/(Input_Parameters!B6*Input_Parameters!B4/12),0)',
-                'Max annual FTE cost before buy becomes cheaper'
+                'Current FTE Cost ($/year)',
+                fte_cost_ref,
+                f'=IF(AND({product_price_ref}>0,{fte_count_ref}>0),{product_price_ref}/({fte_count_ref}*{timeline_ref}/12),0)',
+                'Annual FTE cost where build = product price'
             ),
             (
-                'Subscription Payback (years)',
-                '=Input_Parameters!B14',
-                '=IF(Input_Parameters!B14>0,(Input_Parameters!B5*Input_Parameters!B6*Input_Parameters!B4/12)/Input_Parameters!B14,0)',
-                'Years for build cost to equal subscription payments'
-            ),
-            (
-                'Success Probability Impact (%)',
-                '=Input_Parameters!B10',
-                '=IF(Input_Parameters!B13>0,(Input_Parameters!B5*Input_Parameters!B6*Input_Parameters!B4/12)/Input_Parameters!B13*100,0)',
-                'Required success rate for build to break even'
+                'Product Price ($)',
+                product_price_ref,
+                f'={fte_cost_ref}*{fte_count_ref}*{timeline_ref}/12',
+                'Current build cost (simplified)'
             )
         ]
         
-        for metric, current_formula, breakeven_formula, interpretation in breakeven_calcs:
+        for metric, current_formula, threshold_formula, interpretation in breakeven_calcs:
             worksheet.write_string(row, 0, metric, formats['text_bold'])
-            worksheet.write_formula(row, 1, current_formula, formats['number'])
-            worksheet.write_formula(row, 2, breakeven_formula, formats['number'])
+            worksheet.write_formula(row, 1, current_formula, formats['currency'])
+            worksheet.write_formula(row, 2, threshold_formula, formats['currency'])
             worksheet.write_string(row, 3, interpretation, formats['text'])
+            row += 1
+        
+        row += 2
+        worksheet.merge_range(f'A{row}:D{row}', 'DECISION GUIDANCE', formats['subheader'])
+        row += 1
+        
+        guidance = [
+            ('Decision Rule', 'Compare current vs threshold values above'),
+            ('Build Favored When', 'Current values are below break-even thresholds'),
+            ('Buy Favored When', 'Current values exceed break-even thresholds'),
+            ('Key Insight', 'Small changes in cost parameters can flip the decision'),
+            ('Recommendation', 'Test sensitivity around break-even points')
+        ]
+        
+        for label, description in guidance:
+            worksheet.write_string(row, 0, label, formats['text_bold'])
+            worksheet.write_string(row, 1, description, formats['text'])
             row += 1
         
         row += 2
@@ -934,17 +1012,18 @@ class ExcelExporter:
         # Decision thresholds
         worksheet.write_string(row, 0, 'NPV Difference (Build - Buy):', formats['text_bold'])
         if self.npv_diff_row:
-            worksheet.write_formula(row, 1, f'=Cost_Timeline!J{self.npv_diff_row}', formats['currency_bold'])
+            pv_col = self.pv_col_letter or 'J'
+            worksheet.write_formula(row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.npv_diff_row}", formats['currency_bold'])
         row += 1
         
         worksheet.write_string(row, 0, 'Recommended Decision:', formats['text_bold'])
-        if self.npv_diff_row:
-            worksheet.write_formula(row, 1, f'=IF(Cost_Timeline!J{self.npv_diff_row}<0,"BUILD RECOMMENDED","BUY RECOMMENDED")', formats['text_bold'])
+        if self.npv_diff_row and self.pv_col_letter:
+            worksheet.write_formula(row, 1, f"=IF('{self.TIMELINE_SHEET}'!{self.pv_col_letter}{self.npv_diff_row}<0,'BUILD RECOMMENDED','BUY RECOMMENDED')", formats['text_bold'])
         row += 1
         
         worksheet.write_string(row, 0, 'Confidence Level:', formats['text_bold'])
-        if self.npv_diff_row:
-            worksheet.write_formula(row, 1, f'=IF(ABS(Cost_Timeline!J{self.npv_diff_row})<100000,"LOW","HIGH")', formats['text'])
+        if self.npv_diff_row and self.pv_col_letter:
+            worksheet.write_formula(row, 1, f"=IF(ABS('{self.TIMELINE_SHEET}'!{self.pv_col_letter}{self.npv_diff_row})<100000,'LOW','HIGH')", formats['text'])
         row += 1
         
         row += 2
@@ -1058,30 +1137,21 @@ class ExcelExporter:
             row += 1
 
     def _update_executive_dashboard_formulas(self, workbook, formats):
-        """Update executive dashboard with dynamic Excel formulas linked to Cost_Timeline."""
+        """Update dashboard references after Cost Timeline creation."""
         dashboard = workbook.get_worksheet_by_name('Executive_Dashboard')
-        
-        if dashboard and self.build_total_row and self.buy_total_row and self.npv_diff_row:
-            # Update build and buy costs with formulas that link to Cost_Timeline
-            dashboard.write_formula(self.dashboard_build_cost_row, 1, 
-                                  f'=Cost_Timeline!L{self.build_total_row}', formats['dashboard_metric'])
-            dashboard.write_formula(self.dashboard_build_cost_row, 3,
-                                  f'=Cost_Timeline!L{self.buy_total_row}', formats['dashboard_metric'])
-            
-            # Update NPV difference and recommendation with formulas
-            dashboard.write_formula(self.dashboard_recommendation_row, 1, 
-                                  f'=Cost_Timeline!L{self.npv_diff_row}', formats['dashboard_metric'])
-            
-            recommendation_formula = f'=IF(Cost_Timeline!L{self.npv_diff_row}<0,"BUILD RECOMMENDED","BUY RECOMMENDED")'
-            dashboard.write_formula(self.dashboard_recommendation_row, 3, recommendation_formula, formats['dashboard_metric'])
-            
-            # Add simulation validation if results are available
-            simulation_results = self.scenario_data.get('results', {})
-            if simulation_results and 'expected_build_cost' in simulation_results:
-                # Add a small validation section (optional)
-                validation_row = self.dashboard_recommendation_row + 2
-                dashboard.write_string(validation_row, 0, 'Validation:', formats['text'])
-                dashboard.write_string(validation_row, 1, f'Sim: ${simulation_results["expected_build_cost"]:,.0f}', formats['text'])
+        if not dashboard or not (self.build_total_row and self.buy_total_row and self.npv_diff_row):
+            return
+        pv_col = self.pv_col_letter or 'J'
+        dashboard.write_formula(self.dashboard_build_cost_row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.build_total_row}", formats['dashboard_metric'])
+        dashboard.write_formula(self.dashboard_build_cost_row, 3, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.buy_total_row}", formats['dashboard_metric'])
+        dashboard.write_formula(self.dashboard_recommendation_row, 1, f"='{self.TIMELINE_SHEET}'!{pv_col}{self.npv_diff_row}", formats['dashboard_metric'])
+        recommendation_formula = f"=IF('{self.TIMELINE_SHEET}'!{pv_col}{self.npv_diff_row}<0,'BUILD RECOMMENDED','BUY RECOMMENDED')"
+        dashboard.write_formula(self.dashboard_recommendation_row, 3, recommendation_formula, formats['dashboard_metric'])
+        simulation_results = getattr(self, 'scenario_data', {}).get('results', {}) if hasattr(self, 'scenario_data') else {}
+        if simulation_results and 'expected_build_cost' in simulation_results:
+            validation_row = self.dashboard_recommendation_row + 2
+            dashboard.write_string(validation_row, 0, 'Validation:', formats['text'])
+            dashboard.write_string(validation_row, 1, f"Sim: ${simulation_results['expected_build_cost']:,.0f}", formats['text'])
             
             # Add conditional formatting for advantage cell
             dashboard.conditional_format(self.dashboard_recommendation_row, 1, 
