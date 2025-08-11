@@ -48,6 +48,7 @@ class ExcelExporter:
 
     INPUT_SHEET = 'Input Parameters'
     TIMELINE_SHEET = 'Cost Timeline'
+    SENSITIVITY_SHEET = 'Sensitivity Analysis'
 
     def __init__(self):
         """Initialize the Excel exporter."""
@@ -89,6 +90,7 @@ class ExcelExporter:
                 # Create sheets in order
                 self._create_input_parameters_sheet(workbook, formats, scenario_data)
                 self._create_cost_breakdown_timeline(workbook, formats, scenario_data)
+                self._create_sensitivity_analysis_sheet(workbook, formats, scenario_data)
                 # Removed executive summary and methodology sheets per user request
             
             output.seek(0)
@@ -135,6 +137,21 @@ class ExcelExporter:
             }),
             'calculated_cell': workbook.add_format({
                 'bg_color': '#C6EFCE', 'border': 1, 'align': 'right', 'num_format': '$#,##0'
+            }),
+            'sensitivity_control': workbook.add_format({
+                'bg_color': '#FFE6CC', 'border': 1, 'align': 'center', 'bold': True
+            }),
+            'sensitivity_result': workbook.add_format({
+                'bg_color': '#E6F3FF', 'border': 1, 'align': 'right', 'num_format': '$#,##0'
+            }),
+            'green_highlight': workbook.add_format({
+                'bg_color': '#C6EFCE', 'border': 1, 'align': 'right', 'num_format': '$#,##0'
+            }),
+            'red_highlight': workbook.add_format({
+                'bg_color': '#FFC7CE', 'border': 1, 'align': 'right', 'num_format': '$#,##0'
+            }),
+            'small_text': workbook.add_format({
+                'font_size': 8, 'align': 'center', 'border': 1
             })
         }
     
@@ -224,8 +241,8 @@ class ExcelExporter:
         # Get core parameters
         useful_life = int(safe_float(scenario_data.get('useful_life', 5)))
         build_timeline = safe_float(scenario_data.get('build_timeline', 12))
-        # Dynamic year columns based on useful life (but minimum of 3 for readability)
-        max_years = max(3, useful_life + 1)
+        # Dynamic year columns: Year 0 through Year {useful_life} (no extra year)
+        max_years = max(3, useful_life)  # Remove the +1 to fix empty column issue
         
         # Reference key cells safely
         total_fte_ref = safe_cell_ref(self.param_cells.get('total_fte_cost'))
@@ -235,13 +252,30 @@ class ExcelExporter:
         year_headers = ['Year 0'] + [f'Year {y}' for y in range(1, max_years + 1)]
         headers = ['Cost Component'] + year_headers + ['Total NPV', 'Notes']
         
-        # Merge title across all columns
-        last_col_letter = chr(65 + len(headers) - 1)  # Convert to Excel column letter
+        # Calculate column positions for better formatting
+        total_col = len(year_headers) + 1  # Position of Total NPV column
+        npv_col = total_col
+        notes_col = npv_col + 1
+        
+        # Merge title across all columns with enhanced formatting
+        last_col_letter = chr(65 + len(headers) - 1)
         ws.merge_range(f'A1:{last_col_letter}1', 'Build vs Buy Cost Analysis Timeline', formats['header'])
+        ws.set_row(0, 25)  # Make title row taller
         row += 2
         
+        # Create headers with enhanced formatting
         for col, header in enumerate(headers):
             ws.write_string(row, col, header, formats['subheader'])
+            # Set column widths for better readability
+            if col == 0:  # Cost Component column
+                ws.set_column(col, col, 25)
+            elif col <= len(year_headers):  # Year columns
+                ws.set_column(col, col, 12)
+            elif col == npv_col:  # Total NPV column
+                ws.set_column(col, col, 15)
+            else:  # Notes column
+                ws.set_column(col, col, 35)
+        
         row += 1
         
         # BUILD COSTS SECTION
@@ -255,10 +289,6 @@ class ExcelExporter:
             ('Miscellaneous Costs', self.param_cells.get('misc_costs', "'Input Parameters'!B1"), 'immediate', 'Training, migration, other setup'),
             ('Annual Maintenance & Support', self.param_cells.get('maint_opex', "'Input Parameters'!B1"), 'maintenance', 'Ongoing operational costs')
         ]
-        
-        total_col = 1 + max_years
-        npv_col = total_col + 1
-        notes_col = npv_col + 1
         
         build_pv_rows = []  # Track rows for total calculation
         
@@ -352,6 +382,22 @@ class ExcelExporter:
         ws.write_string(row, notes_col, 'Total build option cost with risk adjustments', formats['text_bold'])
         
         self.build_total_row = row
+        row += 2
+        
+        # Add BUILD year-by-year totals for analytical insight
+        ws.write_string(row, 0, 'Annual Build Costs Summary', formats['text_bold'])
+        # Calculate year-by-year totals (excluding risk premium)
+        for year_idx in range(len(year_headers)):
+            year_col = year_idx + 1
+            # Sum all build cost rows for this year
+            build_year_refs = [f"{chr(65+year_col)}{r+1}" for r in build_pv_rows]
+            if build_year_refs:  # Only if there are costs in this year
+                year_total_formula = "+".join(build_year_refs)
+                ws.write_formula(row, year_col, safe_formula(f"={year_total_formula}"), formats['currency'])
+            else:
+                ws.write_number(row, year_col, 0, formats['currency'])
+        
+        ws.write_string(row, notes_col, 'Annual build costs before risk adjustment', formats['text'])
         row += 3
         
         # BUY COSTS SECTION
@@ -424,7 +470,7 @@ class ExcelExporter:
         
         row += 3
         
-        # COMPARISON SECTION
+        # COMPARISON SECTION with enhanced analytics
         ws.merge_range(f'A{row+1}:B{row+1}', '⚖️ DECISION ANALYSIS', formats['header'])
         row += 2
         
@@ -438,11 +484,31 @@ class ExcelExporter:
         self.npv_diff_row = row
         row += 1
         
-        # Recommendation
+        # Cost Impact percentage
+        ws.write_string(row, 0, 'Cost Impact (%)', formats['text_bold'])
+        impact_formula = f"={chr(65+npv_col)}{self.npv_diff_row+1}/{buy_total_ref}"
+        ws.write_formula(row, npv_col, safe_formula(impact_formula), formats['percent'])
+        ws.write_string(row, notes_col, 'Percentage cost difference (negative = savings)', formats['text'])
+        row += 1
+        
+        # Break-even analysis
+        ws.write_string(row, 0, 'Break-even Build Cost', formats['text_bold'])
+        ws.write_formula(row, npv_col, safe_formula(f"={buy_total_ref}"), formats['currency_bold'])
+        ws.write_string(row, notes_col, 'Build cost at which both options are equal', formats['text'])
+        row += 1
+        
+        # Recommendation with enhanced logic
         ws.write_string(row, 0, 'Recommendation', formats['text_bold'])
         recommendation_formula = f'=IF({chr(65+npv_col)}{self.npv_diff_row+1}<0,"Build","Buy")'
         ws.write_formula(row, npv_col, safe_formula(recommendation_formula), formats['text_bold'])
-        ws.write_string(row, notes_col, 'Based on NPV analysis', formats['text'])
+        ws.write_string(row, notes_col, 'Based on NPV analysis considering all risk factors', formats['text'])
+        row += 1
+        
+        # Decision confidence indicator
+        ws.write_string(row, 0, 'Decision Confidence', formats['text_bold'])
+        confidence_formula = f'=IF(ABS({chr(65+npv_col)}{self.npv_diff_row+1})>{buy_total_ref}*0.1,"High",IF(ABS({chr(65+npv_col)}{self.npv_diff_row+1})>{buy_total_ref}*0.05,"Medium","Low"))'
+        ws.write_formula(row, npv_col, safe_formula(confidence_formula), formats['text_bold'])
+        ws.write_string(row, notes_col, 'High = >10% difference, Medium = 5-10%, Low = <5%', formats['text'])
         
         # Enhanced column formatting
         ws.set_column('A:A', 25)  # Component names
@@ -452,6 +518,388 @@ class ExcelExporter:
         ws.set_column(npv_col, npv_col, 15)  # NPV column
         ws.set_column(notes_col, notes_col, 40)  # Notes column
     
+    def _create_sensitivity_analysis_sheet(self, workbook, formats, scenario_data):
+        """Create comprehensive sensitivity analysis sheet with interactive controls and proper formatting."""
+        ws = workbook.add_worksheet(self.SENSITIVITY_SHEET)
+        
+        # Create special formats for interactive elements
+        interactive_format = workbook.add_format({
+            'bg_color': '#FFE6CC',  # Orange background
+            'border': 1,
+            'align': 'center',
+            'bold': True,
+            'locked': False,  # Allow editing
+            'num_format': '0'
+        })
+        
+        interactive_currency_format = workbook.add_format({
+            'bg_color': '#FFE6CC',  # Orange background
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'locked': False,  # Allow editing
+            'num_format': '$#,##0'
+        })
+        
+        impact_format = workbook.add_format({
+            'bg_color': '#E6F3FF',  # Light blue background
+            'border': 1,
+            'align': 'center',
+            'bold': True,
+            'num_format': '0.0'
+        })
+        
+        # Sheet title and description
+        ws.merge_range('A1:F1', '📊 Sensitivity Analysis - Interactive Decision Tool', formats['header'])
+        ws.write_string(2, 0, 'Adjust parameters below to see real-time impact on Build vs Buy decision', formats['text'])
+        
+        # Extract base parameters from scenario data
+        base_params = {
+            'build_timeline': safe_float(scenario_data.get('build_timeline', 12)),
+            'fte_cost': safe_float(scenario_data.get('fte_cost', 150000)),
+            'fte_count': safe_float(scenario_data.get('fte_count', 2)),
+            'prob_success': safe_float(scenario_data.get('prob_success', 80)),
+            'wacc': safe_float(scenario_data.get('wacc', 8)),
+            'tech_risk': safe_float(scenario_data.get('tech_risk', 0)),
+            'vendor_risk': safe_float(scenario_data.get('vendor_risk', 0)),
+            'market_risk': safe_float(scenario_data.get('market_risk', 0)),
+            'misc_costs': safe_float(scenario_data.get('misc_costs', 0))
+        }
+        
+        # ===========================================
+        # SECTION 1: INTERACTIVE PARAMETER CONTROLS
+        # ===========================================
+        row = 4
+        ws.merge_range(f'A{row}:E{row}', '🎛️ INTERACTIVE CONTROLS', formats['subheader'])
+        row += 1
+        
+        # Headers for the controls section
+        ws.write_string(row, 0, 'Parameter', formats['text_bold'])
+        ws.write_string(row, 1, 'Current Value', formats['text_bold'])
+        ws.write_string(row, 2, 'Low Range', formats['text_bold'])
+        ws.write_string(row, 3, 'High Range', formats['text_bold'])
+        ws.write_string(row, 4, 'Impact Score', formats['text_bold'])
+        row += 1
+        
+        # Store control cell references for both values and ranges
+        control_cells = {}
+        range_cells = {}
+        
+        # Build Timeline Control
+        ws.write_string(row, 0, 'Build Timeline (months)', formats['text'])
+        ws.write_number(row, 1, base_params['build_timeline'], interactive_format)
+        ws.write_number(row, 2, base_params['build_timeline'] * 0.5, interactive_format)  # Low range
+        ws.write_number(row, 3, base_params['build_timeline'] * 3.0, interactive_format)  # High range
+        impact_score = ((base_params['build_timeline'] * 3.0 - base_params['build_timeline'] * 0.5) / base_params['build_timeline']) * 100
+        ws.write_number(row, 4, impact_score, impact_format)
+        control_cells['timeline'] = f'B{row+1}'
+        range_cells['timeline_low'] = f'C{row+1}'
+        range_cells['timeline_high'] = f'D{row+1}'
+        row += 1
+        
+        # FTE Cost Control
+        ws.write_string(row, 0, 'FTE Cost (annual)', formats['text'])
+        ws.write_number(row, 1, base_params['fte_cost'], interactive_currency_format)
+        ws.write_number(row, 2, base_params['fte_cost'] * 0.6, interactive_currency_format)  # Low range
+        ws.write_number(row, 3, base_params['fte_cost'] * 1.8, interactive_currency_format)  # High range
+        impact_score = ((base_params['fte_cost'] * 1.8 - base_params['fte_cost'] * 0.6) / base_params['fte_cost']) * 100
+        ws.write_number(row, 4, impact_score, impact_format)
+        control_cells['fte_cost'] = f'B{row+1}'
+        range_cells['fte_cost_low'] = f'C{row+1}'
+        range_cells['fte_cost_high'] = f'D{row+1}'
+        row += 1
+        
+        # Team Size Control
+        ws.write_string(row, 0, 'Team Size (FTEs)', formats['text'])
+        ws.write_number(row, 1, base_params['fte_count'], interactive_format)
+        ws.write_number(row, 2, max(1, base_params['fte_count'] * 0.5), interactive_format)  # Low range
+        ws.write_number(row, 3, base_params['fte_count'] * 2.0, interactive_format)  # High range
+        impact_score = ((base_params['fte_count'] * 2.0 - max(1, base_params['fte_count'] * 0.5)) / base_params['fte_count']) * 100
+        ws.write_number(row, 4, impact_score, impact_format)
+        control_cells['team_size'] = f'B{row+1}'
+        range_cells['team_size_low'] = f'C{row+1}'
+        range_cells['team_size_high'] = f'D{row+1}'
+        row += 1
+        
+        # Success Probability Control
+        ws.write_string(row, 0, 'Success Probability (%)', formats['text'])
+        ws.write_number(row, 1, base_params['prob_success'], interactive_format)
+        ws.write_number(row, 2, max(1, base_params['prob_success'] * 0.7), interactive_format)  # Low range
+        ws.write_number(row, 3, min(100, base_params['prob_success'] * 1.2), interactive_format)  # High range (capped at 100%)
+        impact_score = ((min(100, base_params['prob_success'] * 1.2) - max(1, base_params['prob_success'] * 0.7)) / base_params['prob_success']) * 100
+        ws.write_number(row, 4, impact_score, impact_format)
+        control_cells['success_prob'] = f'B{row+1}'
+        range_cells['success_prob_low'] = f'C{row+1}'
+        range_cells['success_prob_high'] = f'D{row+1}'
+        row += 1
+        
+        # Risk Factor Control
+        total_risk = base_params['tech_risk'] + base_params['vendor_risk'] + base_params['market_risk']
+        ws.write_string(row, 0, 'Combined Risk (%)', formats['text'])
+        ws.write_number(row, 1, total_risk, interactive_format)
+        ws.write_number(row, 2, 0, interactive_format)  # Low range (no risk)
+        ws.write_number(row, 3, total_risk * 2.0, interactive_format)  # High range (double risk)
+        impact_score = ((total_risk * 2.0 - 0) / max(total_risk, 1)) * 100 if total_risk > 0 else 100
+        ws.write_number(row, 4, impact_score, impact_format)
+        control_cells['risk_factor'] = f'B{row+1}'
+        range_cells['risk_factor_low'] = f'C{row+1}'
+        range_cells['risk_factor_high'] = f'D{row+1}'
+        row += 1
+        
+        # Miscellaneous Costs Control
+        ws.write_string(row, 0, 'Misc Costs ($)', formats['text'])
+        ws.write_number(row, 1, base_params['misc_costs'], interactive_currency_format)
+        ws.write_number(row, 2, 0, interactive_currency_format)  # Low range (no misc costs)
+        ws.write_number(row, 3, base_params['misc_costs'] * 2.0, interactive_currency_format)  # High range
+        misc_impact = (base_params['misc_costs'] * 2.0) if base_params['misc_costs'] > 0 else 0
+        ws.write_number(row, 4, misc_impact, impact_format)
+        control_cells['misc_costs'] = f'B{row+1}'
+        range_cells['misc_costs_low'] = f'C{row+1}'
+        range_cells['misc_costs_high'] = f'D{row+1}'
+        row += 2
+        
+        # ===========================================
+        # SECTION 2: REAL-TIME CALCULATION ENGINE
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '⚡ REAL-TIME RESULTS', formats['subheader'])
+        row += 1  # Reduce spacing
+        
+        # Dynamic build cost calculation
+        ws.write_string(row, 0, 'Dynamic Build Cost (PV)', formats['text_bold'])
+        timeline_cell = control_cells['timeline']
+        fte_cost_cell = control_cells['fte_cost']
+        team_size_cell = control_cells['team_size']
+        success_cell = control_cells['success_prob']
+        
+        # Simplified labor cost calculation
+        labor_formula = f"=({timeline_cell}/12)*{fte_cost_cell}*{team_size_cell}/({success_cell}/100)"
+        ws.write_formula(row, 1, safe_formula(labor_formula), formats['sensitivity_result'])
+        ws.write_string(row, 2, 'Labor cost adjusted for success probability', formats['text'])
+        build_cost_row = row + 1  # Store for later reference
+        row += 1
+        
+        # Buy cost reference
+        buy_cost = safe_float(scenario_data.get('product_price', 0)) + safe_float(scenario_data.get('subscription_price', 0))
+        ws.write_string(row, 0, 'Buy Cost (Reference)', formats['text_bold'])
+        ws.write_number(row, 1, buy_cost, formats['currency'])
+        ws.write_string(row, 2, 'Static reference value', formats['text'])
+        buy_cost_row = row + 1  # Store for later reference
+        row += 1
+        
+        # NPV difference calculation
+        ws.write_string(row, 0, 'NPV Difference (Build - Buy)', formats['text_bold'])
+        npv_diff_formula = f"=B{build_cost_row}-B{buy_cost_row}"
+        ws.write_formula(row, 1, safe_formula(npv_diff_formula), formats['sensitivity_result'])
+        ws.write_string(row, 2, 'Positive = Build costs more', formats['text'])
+        diff_row = row + 1  # Store for later reference
+        row += 1
+        
+        # Recommendation
+        ws.write_string(row, 0, 'Recommendation', formats['text_bold'])
+        recommendation_formula = f'=IF(B{diff_row}<0,"BUILD","BUY")'
+        ws.write_formula(row, 1, safe_formula(recommendation_formula), formats['text_bold'])
+        ws.write_string(row, 2, 'Based on cost difference', formats['text'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 3: COST DRIVER ANALYSIS - STEP-BY-STEP BREAKDOWN
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '💰 Cost Driver Analysis', formats['subheader'])
+        row += 1
+        
+        # Add explanation
+        ws.write_string(row, 0, 'Step-by-step cost calculation showing how each component builds up:', formats['text'])
+        row += 2
+        
+        # Current Scenario Calculation Breakdown
+        ws.write_string(row, 0, 'Cost Component', formats['text_bold'])
+        ws.write_string(row, 1, 'Current Value', formats['text_bold'])
+        ws.write_string(row, 2, 'Calculation Method', formats['text_bold'])
+        row += 1
+        
+        # 1. Core Labor Cost
+        ws.write_string(row, 0, '1. Core Labor Cost', formats['text'])
+        core_labor_formula = f"=({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}"
+        ws.write_formula(row, 1, safe_formula(core_labor_formula), formats['currency'])
+        ws.write_string(row, 2, 'Timeline × FTE Cost × Team Size ÷ 12', formats['text'])
+        row += 1
+        
+        # 2. Success-Adjusted Cost  
+        ws.write_string(row, 0, '2. Success-Adjusted Cost', formats['text'])
+        success_adj_formula = f"={core_labor_formula.replace('=', '')}/({control_cells['success_prob']}/100)"
+        ws.write_formula(row, 1, safe_formula(success_adj_formula), formats['currency'])
+        ws.write_string(row, 2, 'Core Labor ÷ Success Probability', formats['text'])
+        row += 1
+        
+        # 3. Add Miscellaneous Costs
+        ws.write_string(row, 0, '3. Plus Miscellaneous Costs', formats['text'])
+        with_misc_formula = f"={success_adj_formula.replace('=', '')}+{control_cells['misc_costs']}"
+        ws.write_formula(row, 1, safe_formula(with_misc_formula), formats['currency'])
+        ws.write_string(row, 2, 'Success-Adjusted + Misc Costs', formats['text'])
+        row += 1
+        
+        # 4. Final Risk-Adjusted Total
+        ws.write_string(row, 0, '4. Final Build Cost (with Risk)', formats['text_bold'])
+        total_formula = f"=({with_misc_formula.replace('=', '')})*(1+{control_cells['risk_factor']}/100)"
+        ws.write_formula(row, 1, safe_formula(total_formula), formats['currency_bold'])
+        ws.write_string(row, 2, '(Adjusted + Misc) × (1 + Risk %)', formats['text_bold'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 4: PARAMETER SENSITIVITY ANALYSIS  
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '📈 Parameter Sensitivity Analysis', formats['subheader'])
+        row += 1
+        
+        # Explanation
+        ws.write_string(row, 0, 'Each row tests ONE parameter while keeping all others constant:', formats['text'])
+        row += 2
+        
+        # Headers
+        ws.write_string(row, 0, 'Parameter Impact', formats['text_bold'])
+        ws.write_string(row, 1, 'Optimistic Case', formats['text_bold'])
+        ws.write_string(row, 2, 'Current Scenario', formats['text_bold'])
+        ws.write_string(row, 3, 'Conservative Case', formats['text_bold'])
+        ws.write_string(row, 4, 'Cost Swing', formats['text_bold'])
+        row += 1
+        
+        # Timeline sensitivity (short description + parameter range in parentheses)
+        timeline_low_val = f"({range_cells['timeline_low']} months)"
+        timeline_high_val = f"({range_cells['timeline_high']} months)"
+        ws.write_string(row, 0, f'Timeline Impact {timeline_low_val} to {timeline_high_val}', formats['text'])
+        
+        timeline_low_cost = f"=(({range_cells['timeline_low']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        timeline_high_cost = f"=(({range_cells['timeline_high']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        timeline_range_formula = f"={timeline_high_cost.replace('=', '')}-{timeline_low_cost.replace('=', '')}"
+        
+        ws.write_formula(row, 1, safe_formula(timeline_low_cost), formats['green_highlight'])
+        ws.write_formula(row, 2, safe_formula(total_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(timeline_high_cost), formats['red_highlight'])
+        ws.write_formula(row, 4, safe_formula(timeline_range_formula), formats['currency_bold'])
+        row += 1
+        
+        # FTE Cost sensitivity
+        fte_low_val = f"(${safe_float(base_params.get('fte_cost', 150000)) * 0.8:,.0f})"
+        fte_high_val = f"(${safe_float(base_params.get('fte_cost', 150000)) * 1.3:,.0f})"
+        ws.write_string(row, 0, f'Labor Rate Impact {fte_low_val} to {fte_high_val}', formats['text'])
+        
+        fte_low_cost = f"=(({control_cells['timeline']}/12)*{range_cells['fte_cost_low']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        fte_high_cost = f"=(({control_cells['timeline']}/12)*{range_cells['fte_cost_high']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        fte_range_formula = f"={fte_high_cost.replace('=', '')}-{fte_low_cost.replace('=', '')}"
+        
+        ws.write_formula(row, 1, safe_formula(fte_low_cost), formats['green_highlight'])
+        ws.write_formula(row, 2, safe_formula(total_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(fte_high_cost), formats['red_highlight'])
+        ws.write_formula(row, 4, safe_formula(fte_range_formula), formats['currency_bold'])
+        row += 1
+        
+        # Team Size sensitivity
+        team_low_val = f"({max(1, safe_float(base_params.get('fte_count', 2)) - 1):.0f} people)"
+        team_high_val = f"({safe_float(base_params.get('fte_count', 2)) + 2:.0f} people)"
+        ws.write_string(row, 0, f'Team Size Impact {team_low_val} to {team_high_val}', formats['text'])
+        
+        team_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{range_cells['team_size_low']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        team_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{range_cells['team_size_high']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        team_range_formula = f"={team_high_cost.replace('=', '')}-{team_low_cost.replace('=', '')}"
+        
+        ws.write_formula(row, 1, safe_formula(team_low_cost), formats['green_highlight'])
+        ws.write_formula(row, 2, safe_formula(total_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(team_high_cost), formats['red_highlight'])
+        ws.write_formula(row, 4, safe_formula(team_range_formula), formats['currency_bold'])
+        row += 1
+        
+        # Success Probability sensitivity (note: higher success = lower cost)
+        success_low_val = f"({max(10, safe_float(base_params.get('prob_success', 80)) - 20):.0f}%)"
+        success_high_val = f"({min(95, safe_float(base_params.get('prob_success', 80)) + 15):.0f}%)"
+        ws.write_string(row, 0, f'Success Risk Impact {success_high_val} to {success_low_val}', formats['text'])
+        
+        success_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({range_cells['success_prob_low']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        success_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({range_cells['success_prob_high']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
+        success_range_formula = f"={success_low_cost.replace('=', '')}-{success_high_cost.replace('=', '')}"
+        
+        ws.write_formula(row, 1, safe_formula(success_high_cost), formats['green_highlight'])
+        ws.write_formula(row, 2, safe_formula(total_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(success_low_cost), formats['red_highlight'])
+        ws.write_formula(row, 4, safe_formula(success_range_formula), formats['currency_bold'])
+        row += 1
+        
+        # Risk Factor sensitivity
+        risk_factor_base = safe_float(base_params.get('tech_risk', 0)) + safe_float(base_params.get('vendor_risk', 0)) + safe_float(base_params.get('market_risk', 0))
+        risk_low_val = f"({max(0, risk_factor_base - 10):.0f}%)"
+        risk_high_val = f"({risk_factor_base + 20:.0f}%)"
+        ws.write_string(row, 0, f'Risk Premium Impact {risk_low_val} to {risk_high_val}', formats['text'])
+        
+        risk_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{range_cells['risk_factor_low']}/100)"
+        risk_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{range_cells['risk_factor_high']}/100)"
+        risk_range_formula = f"={risk_high_cost.replace('=', '')}-{risk_low_cost.replace('=', '')}"
+        
+        ws.write_formula(row, 1, safe_formula(risk_low_cost), formats['green_highlight'])
+        ws.write_formula(row, 2, safe_formula(total_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(risk_high_cost), formats['red_highlight'])
+        ws.write_formula(row, 4, safe_formula(risk_range_formula), formats['currency_bold'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 5: INSTRUCTIONS AND INTERPRETATION
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '📋 How to Use This Analysis', formats['subheader'])
+        row += 1
+        
+        instructions = [
+            "• Orange cells are editable - adjust values to test different scenarios",
+            "• Green = optimistic outcomes (lower costs), Red = conservative outcomes (higher costs)", 
+            "• Cost Swing shows the dollar impact range for each parameter",
+            "• Focus on parameters with the largest cost swings for the biggest decision impact",
+            "• All calculations update automatically when you change input values"
+        ]
+        
+        for instruction in instructions:
+            ws.write_string(row, 0, instruction, formats['text'])
+            row += 1
+        
+        row += 1
+        ws.write_string(row, 0, 'Key Insights:', formats['text_bold'])
+        row += 1
+        insights = [
+            "• Parameters with high cost swings deserve the most attention in planning",
+            "• Success probability has inverse relationship: higher % = lower total cost",
+            "• Risk factors multiply the base cost, so small % changes have big impacts"
+        ]
+        
+        for insight in insights:
+            ws.write_string(row, 0, insight, formats['text'])
+            row += 1
+        
+        # ===========================================
+        # COLUMN FORMATTING AND PROTECTION
+        # ===========================================
+        ws.set_column('A:A', 25)  # Parameter labels
+        ws.set_column('B:B', 15)  # Current values
+        ws.set_column('C:C', 12)  # Low range values
+        ws.set_column('D:D', 12)  # High range values
+        ws.set_column('E:E', 15)  # Impact scores/ranges
+        
+        # Protect the sheet but allow editing of interactive cells
+        try:
+            ws.protect('SensitivityAnalysis2024', {
+                'format_cells': False,
+                'format_columns': False,
+                'format_rows': False,
+                'insert_columns': False,
+                'insert_rows': False,
+                'insert_hyperlinks': False,
+                'delete_columns': False,
+                'delete_rows': False,
+                'select_locked_cells': True,
+                'sort': False,
+                'autofilter': False,
+                'pivot_tables': False,
+                'select_unlocked_cells': True
+            })
+        except Exception:
+            # If protection fails, continue without it
+            pass
+
     def _create_executive_summary(self, workbook, formats, scenario_data):
         """Create executive summary sheet."""
         ws = workbook.add_worksheet('Executive Summary')
