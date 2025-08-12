@@ -1335,7 +1335,8 @@ class BuildVsBuyApp:
         port = int(os.environ.get('PORT', port))
         host = '0.0.0.0' if not debug else host
         
-        self.app.run_server(debug=debug, host=host, port=port)
+        # Use the new Dash API method
+        self.app.run(debug=debug, host=host, port=port)
 
 
 if __name__ == "__main__":
