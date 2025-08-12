@@ -17,6 +17,9 @@ xlsxwriter==3.2.0
 # Development and testing
 pytest==8.3.3
 
+# Production server
+gunicorn==21.2.0
+
 # Optional: For better development experience
 jupyter==1.1.1
 

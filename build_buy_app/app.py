@@ -1323,9 +1323,17 @@ class BuildVsBuyApp:
     
     def run(self, debug=False, host='127.0.0.1', port=8060):
         """Run the Dash app."""
-        self.app.run(debug=debug, host=host, port=port)
+        # Use environment port for production deployment
+        import os
+        port = int(os.environ.get('PORT', port))
+        host = '0.0.0.0' if not debug else host
+        
+        self.app.run_server(debug=debug, host=host, port=port)
 
 
 if __name__ == "__main__":
     app = BuildVsBuyApp()
-    app.run(debug=True, port=8060)
+    # Check if running in production
+    import os
+    is_production = os.environ.get('PORT') is not None
+    app.run(debug=not is_production, port=8060)

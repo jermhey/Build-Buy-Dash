@@ -585,12 +585,26 @@ class ExcelExporter:
         control_cells = {}
         range_cells = {}
         
+        # Define sensitivity range configurations for flexibility
+        # These ranges can be easily modified to change how sensitive the analysis is
+        # or can be made user-configurable through the UI in future versions
+        SENSITIVITY_RANGES = {
+            'timeline': {'low_pct': 0.7, 'high_pct': 1.5},      # -30% to +50%
+            'fte_cost': {'low_pct': 0.8, 'high_pct': 1.3},      # -20% to +30%
+            'team_size': {'low_pct': 0.75, 'high_pct': 1.5},    # -25% to +50%
+            'success_prob': {'low_delta': -20, 'high_delta': 15}, # -20% to +15%
+            'risk_factor': {'low_delta': -10, 'high_delta': 20}   # -10% to +20%
+        }
+        
         # Build Timeline Control
         ws.write_string(row, 0, 'Build Timeline (months)', formats['text'])
-        ws.write_number(row, 1, base_params['build_timeline'], interactive_format)
-        ws.write_number(row, 2, base_params['build_timeline'] * 0.5, interactive_format)  # Low range
-        ws.write_number(row, 3, base_params['build_timeline'] * 3.0, interactive_format)  # High range
-        impact_score = ((base_params['build_timeline'] * 3.0 - base_params['build_timeline'] * 0.5) / base_params['build_timeline']) * 100
+        timeline_base = safe_float(base_params.get('build_timeline', 12))
+        timeline_low = max(1, timeline_base * SENSITIVITY_RANGES['timeline']['low_pct'])
+        timeline_high = timeline_base * SENSITIVITY_RANGES['timeline']['high_pct']
+        ws.write_number(row, 1, timeline_base, interactive_format)
+        ws.write_number(row, 2, timeline_low, interactive_format)
+        ws.write_number(row, 3, timeline_high, interactive_format)
+        impact_score = ((timeline_high - timeline_low) / timeline_base) * 100
         ws.write_number(row, 4, impact_score, impact_format)
         control_cells['timeline'] = f'B{row+1}'
         range_cells['timeline_low'] = f'C{row+1}'
@@ -599,10 +613,13 @@ class ExcelExporter:
         
         # FTE Cost Control
         ws.write_string(row, 0, 'FTE Cost (annual)', formats['text'])
-        ws.write_number(row, 1, base_params['fte_cost'], interactive_currency_format)
-        ws.write_number(row, 2, base_params['fte_cost'] * 0.6, interactive_currency_format)  # Low range
-        ws.write_number(row, 3, base_params['fte_cost'] * 1.8, interactive_currency_format)  # High range
-        impact_score = ((base_params['fte_cost'] * 1.8 - base_params['fte_cost'] * 0.6) / base_params['fte_cost']) * 100
+        fte_base = safe_float(base_params.get('fte_cost', 150000))
+        fte_low = fte_base * SENSITIVITY_RANGES['fte_cost']['low_pct']
+        fte_high = fte_base * SENSITIVITY_RANGES['fte_cost']['high_pct']
+        ws.write_number(row, 1, fte_base, interactive_currency_format)
+        ws.write_number(row, 2, fte_low, interactive_currency_format)
+        ws.write_number(row, 3, fte_high, interactive_currency_format)
+        impact_score = ((fte_high - fte_low) / fte_base) * 100
         ws.write_number(row, 4, impact_score, impact_format)
         control_cells['fte_cost'] = f'B{row+1}'
         range_cells['fte_cost_low'] = f'C{row+1}'
@@ -611,10 +628,13 @@ class ExcelExporter:
         
         # Team Size Control
         ws.write_string(row, 0, 'Team Size (FTEs)', formats['text'])
-        ws.write_number(row, 1, base_params['fte_count'], interactive_format)
-        ws.write_number(row, 2, max(1, base_params['fte_count'] * 0.5), interactive_format)  # Low range
-        ws.write_number(row, 3, base_params['fte_count'] * 2.0, interactive_format)  # High range
-        impact_score = ((base_params['fte_count'] * 2.0 - max(1, base_params['fte_count'] * 0.5)) / base_params['fte_count']) * 100
+        team_base = safe_float(base_params.get('fte_count', 2))
+        team_low = max(1, team_base * SENSITIVITY_RANGES['team_size']['low_pct'])
+        team_high = team_base * SENSITIVITY_RANGES['team_size']['high_pct']
+        ws.write_number(row, 1, team_base, interactive_format)
+        ws.write_number(row, 2, team_low, interactive_format)
+        ws.write_number(row, 3, team_high, interactive_format)
+        impact_score = ((team_high - team_low) / team_base) * 100
         ws.write_number(row, 4, impact_score, impact_format)
         control_cells['team_size'] = f'B{row+1}'
         range_cells['team_size_low'] = f'C{row+1}'
@@ -623,10 +643,13 @@ class ExcelExporter:
         
         # Success Probability Control
         ws.write_string(row, 0, 'Success Probability (%)', formats['text'])
-        ws.write_number(row, 1, base_params['prob_success'], interactive_format)
-        ws.write_number(row, 2, max(1, base_params['prob_success'] * 0.7), interactive_format)  # Low range
-        ws.write_number(row, 3, min(100, base_params['prob_success'] * 1.2), interactive_format)  # High range (capped at 100%)
-        impact_score = ((min(100, base_params['prob_success'] * 1.2) - max(1, base_params['prob_success'] * 0.7)) / base_params['prob_success']) * 100
+        success_base = safe_float(base_params.get('prob_success', 80))
+        success_low = max(10, success_base + SENSITIVITY_RANGES['success_prob']['low_delta'])
+        success_high = min(95, success_base + SENSITIVITY_RANGES['success_prob']['high_delta'])
+        ws.write_number(row, 1, success_base, interactive_format)
+        ws.write_number(row, 2, success_low, interactive_format)
+        ws.write_number(row, 3, success_high, interactive_format)
+        impact_score = ((success_high - success_low) / success_base) * 100
         ws.write_number(row, 4, impact_score, impact_format)
         control_cells['success_prob'] = f'B{row+1}'
         range_cells['success_prob_low'] = f'C{row+1}'
@@ -634,12 +657,16 @@ class ExcelExporter:
         row += 1
         
         # Risk Factor Control
-        total_risk = base_params['tech_risk'] + base_params['vendor_risk'] + base_params['market_risk']
+        risk_base = (safe_float(base_params.get('tech_risk', 0)) + 
+                    safe_float(base_params.get('vendor_risk', 0)) + 
+                    safe_float(base_params.get('market_risk', 0)))
+        risk_low = max(0, risk_base + SENSITIVITY_RANGES['risk_factor']['low_delta'])
+        risk_high = risk_base + SENSITIVITY_RANGES['risk_factor']['high_delta']
         ws.write_string(row, 0, 'Combined Risk (%)', formats['text'])
-        ws.write_number(row, 1, total_risk, interactive_format)
-        ws.write_number(row, 2, 0, interactive_format)  # Low range (no risk)
-        ws.write_number(row, 3, total_risk * 2.0, interactive_format)  # High range (double risk)
-        impact_score = ((total_risk * 2.0 - 0) / max(total_risk, 1)) * 100 if total_risk > 0 else 100
+        ws.write_number(row, 1, risk_base, interactive_format)
+        ws.write_number(row, 2, risk_low, interactive_format)
+        ws.write_number(row, 3, risk_high, interactive_format)
+        impact_score = ((risk_high - risk_low) / max(risk_base, 1)) * 100 if risk_base > 0 else 100
         ws.write_number(row, 4, impact_score, impact_format)
         control_cells['risk_factor'] = f'B{row+1}'
         range_cells['risk_factor_low'] = f'C{row+1}'
@@ -763,10 +790,8 @@ class ExcelExporter:
         ws.write_string(row, 4, 'Cost Swing', formats['text_bold'])
         row += 1
         
-        # Timeline sensitivity (short description + parameter range in parentheses)
-        timeline_low_val = f"({range_cells['timeline_low']} months)"
-        timeline_high_val = f"({range_cells['timeline_high']} months)"
-        ws.write_string(row, 0, f'Timeline Impact {timeline_low_val} to {timeline_high_val}', formats['text'])
+        # Timeline sensitivity - clean label without redundant value ranges
+        ws.write_string(row, 0, 'Timeline', formats['text'])
         
         timeline_low_cost = f"=(({range_cells['timeline_low']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
         timeline_high_cost = f"=(({range_cells['timeline_high']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
@@ -778,10 +803,8 @@ class ExcelExporter:
         ws.write_formula(row, 4, safe_formula(timeline_range_formula), formats['currency_bold'])
         row += 1
         
-        # FTE Cost sensitivity
-        fte_low_val = f"(${safe_float(base_params.get('fte_cost', 150000)) * 0.8:,.0f})"
-        fte_high_val = f"(${safe_float(base_params.get('fte_cost', 150000)) * 1.3:,.0f})"
-        ws.write_string(row, 0, f'Labor Rate Impact {fte_low_val} to {fte_high_val}', formats['text'])
+        # FTE Cost sensitivity - clean label without redundant value ranges
+        ws.write_string(row, 0, 'Labor Rate', formats['text'])
         
         fte_low_cost = f"=(({control_cells['timeline']}/12)*{range_cells['fte_cost_low']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
         fte_high_cost = f"=(({control_cells['timeline']}/12)*{range_cells['fte_cost_high']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
@@ -793,10 +816,8 @@ class ExcelExporter:
         ws.write_formula(row, 4, safe_formula(fte_range_formula), formats['currency_bold'])
         row += 1
         
-        # Team Size sensitivity
-        team_low_val = f"({max(1, safe_float(base_params.get('fte_count', 2)) - 1):.0f} people)"
-        team_high_val = f"({safe_float(base_params.get('fte_count', 2)) + 2:.0f} people)"
-        ws.write_string(row, 0, f'Team Size Impact {team_low_val} to {team_high_val}', formats['text'])
+        # Team Size sensitivity - clean label without redundant value ranges
+        ws.write_string(row, 0, 'Team Size', formats['text'])
         
         team_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{range_cells['team_size_low']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
         team_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{range_cells['team_size_high']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
@@ -808,10 +829,8 @@ class ExcelExporter:
         ws.write_formula(row, 4, safe_formula(team_range_formula), formats['currency_bold'])
         row += 1
         
-        # Success Probability sensitivity (note: higher success = lower cost)
-        success_low_val = f"({max(10, safe_float(base_params.get('prob_success', 80)) - 20):.0f}%)"
-        success_high_val = f"({min(95, safe_float(base_params.get('prob_success', 80)) + 15):.0f}%)"
-        ws.write_string(row, 0, f'Success Risk Impact {success_high_val} to {success_low_val}', formats['text'])
+        # Success Probability sensitivity - clean label without redundant value ranges
+        ws.write_string(row, 0, 'Success Rate', formats['text'])
         
         success_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({range_cells['success_prob_low']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
         success_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({range_cells['success_prob_high']}/100)+{control_cells['misc_costs']})*(1+{control_cells['risk_factor']}/100)"
@@ -823,11 +842,8 @@ class ExcelExporter:
         ws.write_formula(row, 4, safe_formula(success_range_formula), formats['currency_bold'])
         row += 1
         
-        # Risk Factor sensitivity
-        risk_factor_base = safe_float(base_params.get('tech_risk', 0)) + safe_float(base_params.get('vendor_risk', 0)) + safe_float(base_params.get('market_risk', 0))
-        risk_low_val = f"({max(0, risk_factor_base - 10):.0f}%)"
-        risk_high_val = f"({risk_factor_base + 20:.0f}%)"
-        ws.write_string(row, 0, f'Risk Premium Impact {risk_low_val} to {risk_high_val}', formats['text'])
+        # Risk Factor sensitivity - clean label without redundant value ranges
+        ws.write_string(row, 0, 'Risk Premium', formats['text'])
         
         risk_low_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{range_cells['risk_factor_low']}/100)"
         risk_high_cost = f"=(({control_cells['timeline']}/12)*{control_cells['fte_cost']}*{control_cells['team_size']}/({control_cells['success_prob']}/100)+{control_cells['misc_costs']})*(1+{range_cells['risk_factor_high']}/100)"

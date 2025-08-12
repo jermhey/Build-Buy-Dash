@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: build-buy-dashboard
+    env: python
+    plan: free
+    buildCommand: pip install -r build_buy_app/requirements.txt
+    startCommand: cd build_buy_app && python app.py
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: PYTHONPATH
+        value: /opt/render/project/src/build_buy_app
+    healthCheckPath: /
