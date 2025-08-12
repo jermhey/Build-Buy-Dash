@@ -21,12 +21,12 @@ RATE_LIMIT_WINDOW = 60  # seconds
 SESSION_TIMEOUT = 3600  # 1 hour in seconds
 SECURE_RANDOM_BYTES = 32
 
-# Content Security Policy
+# Content Security Policy - Updated to allow required CDNs for UI styling
 CSP_POLICY = {
     'default-src': "'self'",
-    'script-src': "'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com",
-    'style-src': "'self' 'unsafe-inline' https://cdnjs.cloudflare.com", 
-    'font-src': "'self' https://cdnjs.cloudflare.com",
+    'script-src': "'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
+    'style-src': "'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net", 
+    'font-src': "'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
     'img-src': "'self' data:",
     'connect-src': "'self'"
 }

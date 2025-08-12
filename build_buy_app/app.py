@@ -46,7 +46,7 @@ class BuildVsBuyApp:
             external_stylesheets=[dbc.themes.FLATLY,
                                 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'],
             suppress_callback_exceptions=True,
-            serve_locally=True,  # Serve assets locally to avoid loading issues
+            serve_locally=False,  # Allow external stylesheets to load properly
             assets_ignore=r'.*\.map$'  # Ignore source map files that can cause conflicts
         )
         
@@ -78,12 +78,12 @@ class BuildVsBuyApp:
             response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
             response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
             
-            # Content Security Policy (CSP)
+            # Content Security Policy (CSP) - Allow required CDNs for styling
             csp = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
-                "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-                "font-src 'self' https://cdnjs.cloudflare.com; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
+                "font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
                 "img-src 'self' data:; "
                 "connect-src 'self'"
             )
