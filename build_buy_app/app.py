@@ -19,8 +19,20 @@ import plotly.graph_objects as go
 def safe_float(val, default=0.0):
     """Safely convert value to float."""
     try:
-        return float(val) if val not in (None, "") else default
-    except Exception:
+        if val in (None, ""):
+            return default
+        
+        # Convert to float with bounds checking
+        result = float(val)
+        
+        # Check for reasonable bounds to prevent overflow
+        if abs(result) > 1e12:  # 1 trillion limit
+            print(f"Warning: Value {val} exceeds reasonable bounds")
+            return default
+            
+        return result
+    except (ValueError, TypeError, OverflowError) as e:
+        print(f"Warning: Failed to convert {val} to float: {e}")
         return default
 
 
@@ -38,6 +50,9 @@ class BuildVsBuyApp:
             assets_ignore=r'.*\.map$'  # Ignore source map files that can cause conflicts
         )
         
+        # Configure security settings
+        self._configure_security()
+        
         # Configure server settings for better asset handling
         self.app.server.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching during development
         
@@ -51,6 +66,30 @@ class BuildVsBuyApp:
         self.setup_layout()
         self.setup_callbacks()
         self.setup_scenario_callbacks()
+    
+    def _configure_security(self):
+        """Configure security headers and settings."""
+        @self.app.server.after_request
+        def add_security_headers(response):
+            # Security headers
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Frame-Options'] = 'DENY'
+            response.headers['X-XSS-Protection'] = '1; mode=block'
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+            response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+            
+            # Content Security Policy (CSP)
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
+                "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+                "font-src 'self' https://cdnjs.cloudflare.com; "
+                "img-src 'self' data:; "
+                "connect-src 'self'"
+            )
+            response.headers['Content-Security-Policy'] = csp
+            
+            return response
     
     def setup_layout(self):
         """Set up the main layout structure."""

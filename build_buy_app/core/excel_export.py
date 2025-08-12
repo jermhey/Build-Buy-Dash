@@ -11,7 +11,9 @@ def safe_float(val, default=0.0):
     """Safely convert value to float."""
     try:
         return float(val) if val not in (None, "") else default
-    except Exception:
+    except (ValueError, TypeError, OverflowError) as e:
+        # Log specific error types for monitoring
+        print(f"Warning: Failed to convert value {val} to float: {e}")
         return default
 
 

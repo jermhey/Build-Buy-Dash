@@ -4,12 +4,33 @@ Provides save/load, comparison, and version control for scenarios
 """
 import json
 import uuid
+import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import pandas as pd
 from dataclasses import dataclass, asdict
-import uuid
+
+
+def sanitize_string(value: str, max_length: int = 255) -> str:
+    """
+    Sanitize string input to prevent injection attacks.
+    
+    Args:
+        value: String to sanitize
+        max_length: Maximum allowed length
+        
+    Returns:
+        Sanitized string
+    """
+    if not isinstance(value, str):
+        return ""
+    
+    # Remove potentially dangerous characters
+    sanitized = re.sub(r'[<>"\';\\]', '', value)
+    
+    # Limit length
+    return sanitized[:max_length].strip()
 
 
 @dataclass
@@ -38,7 +59,7 @@ class ScenarioManager:
         """Load scenario metadata."""
         if self.metadata_file.exists():
             try:
-                with open(self.metadata_file, 'r') as f:
+                with open(self.metadata_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
                 print(f"Error loading metadata: {e}")
@@ -47,7 +68,7 @@ class ScenarioManager:
     def _save_metadata(self):
         """Save scenario metadata."""
         try:
-            with open(self.metadata_file, 'w') as f:
+            with open(self.metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata, f, indent=2)
         except Exception as e:
             print(f"Error saving metadata: {e}")
@@ -55,6 +76,13 @@ class ScenarioManager:
     def save_scenario(self, scenario: Dict[str, Any], name: str, 
                      description: str = "", tags: List[str] = None) -> str:
         """Save a scenario with metadata."""
+        # Sanitize inputs
+        name = sanitize_string(name, 100)
+        description = sanitize_string(description, 500)
+        
+        if not name.strip():
+            raise ValueError("Scenario name cannot be empty")
+        
         scenario_id = str(uuid.uuid4())
         timestamp = datetime.now().isoformat()
         
@@ -66,7 +94,7 @@ class ScenarioManager:
             created_date=timestamp,
             last_modified=timestamp,
             version=1,
-            tags=tags or []
+            tags=[sanitize_string(tag, 50) for tag in (tags or [])]
         )
         
         # Save scenario data
