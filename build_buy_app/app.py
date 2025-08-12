@@ -13,27 +13,13 @@ from data.config_manager import app_config, user_prefs, template_manager
 from data.scenario_manager import scenario_manager, ScenarioComparison
 from core.advanced_analytics import AdvancedAnalytics, ReportGenerator
 from src.simulation import BuildVsBuySimulator
+from config.security import security_config, secure_app_initialization, safe_input_handler
 import plotly.graph_objects as go
 
 
 def safe_float(val, default=0.0):
-    """Safely convert value to float."""
-    try:
-        if val in (None, ""):
-            return default
-        
-        # Convert to float with bounds checking
-        result = float(val)
-        
-        # Check for reasonable bounds to prevent overflow
-        if abs(result) > 1e12:  # 1 trillion limit
-            print(f"Warning: Value {val} exceeds reasonable bounds")
-            return default
-            
-        return result
-    except (ValueError, TypeError, OverflowError) as e:
-        print(f"Warning: Failed to convert {val} to float: {e}")
-        return default
+    """Safely convert value to float with security validation."""
+    return security_config.secure_float_conversion(val, default)
 
 
 class BuildVsBuyApp:
@@ -46,50 +32,31 @@ class BuildVsBuyApp:
             external_stylesheets=[dbc.themes.FLATLY,
                                 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'],
             suppress_callback_exceptions=True,
-            serve_locally=False,  # Allow external stylesheets to load properly
+            serve_locally=True,  # Serve assets locally to avoid loading issues
             assets_ignore=r'.*\.map$'  # Ignore source map files that can cause conflicts
         )
-        
-        # Configure security settings
-        self._configure_security()
         
         # Configure server settings for better asset handling
         self.app.server.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching during development
         
+        # Apply security configuration (production-safe)
+        self.app = secure_app_initialization(self.app, self.app.server)
+        
         # Initialize modules
         self.modern_ui = ModernUI()
         self.excel_exporter = ExcelExporter()
-        self.advanced_analytics = AdvancedAnalytics()
+        # Initialize AdvancedAnalytics safely
+        try:
+            self.advanced_analytics = AdvancedAnalytics()
+        except Exception as e:
+            print(f"Warning: AdvancedAnalytics failed to initialize: {e}")
+            self.advanced_analytics = None
         self.simulator = BuildVsBuySimulator()
         self.current_results = {}
         
         self.setup_layout()
         self.setup_callbacks()
         self.setup_scenario_callbacks()
-    
-    def _configure_security(self):
-        """Configure security headers and settings."""
-        @self.app.server.after_request
-        def add_security_headers(response):
-            # Security headers
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            response.headers['X-Frame-Options'] = 'DENY'
-            response.headers['X-XSS-Protection'] = '1; mode=block'
-            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-            response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-            
-            # Content Security Policy (CSP) - Allow required CDNs for styling
-            csp = (
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
-                "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
-                "font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
-                "img-src 'self' data:; "
-                "connect-src 'self'"
-            )
-            response.headers['Content-Security-Policy'] = csp
-            
-            return response
     
     def setup_layout(self):
         """Set up the main layout structure."""
@@ -1372,11 +1339,11 @@ class BuildVsBuyApp:
 
 
 if __name__ == "__main__":
-    # Running directly with python app.py
     app = BuildVsBuyApp()
+    # Check if running in production
     is_production = os.environ.get('PORT') is not None
-    app.run(debug=not is_production, port=int(os.environ.get('PORT', 8060)))
+    app.run(debug=not is_production, port=8060)
 else:
-    # Running with Gunicorn - create app instance and expose server
+    # For Gunicorn - create the app instance at module level
     app = BuildVsBuyApp()
     server = app.app.server
