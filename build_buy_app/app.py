@@ -1333,11 +1333,11 @@ class BuildVsBuyApp:
 
 
 if __name__ == "__main__":
+    # Running directly with python app.py
     app = BuildVsBuyApp()
-    # Check if running in production
     is_production = os.environ.get('PORT') is not None
-    app.run(debug=not is_production, port=8060)
+    app.run(debug=not is_production, port=int(os.environ.get('PORT', 8060)))
 else:
-    # For Gunicorn - create the app instance at module level
+    # Running with Gunicorn - create app instance and expose server
     app = BuildVsBuyApp()
     server = app.app.server

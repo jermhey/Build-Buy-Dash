@@ -12,7 +12,7 @@
 
 The Build vs Buy Decision Dashboard is a **production-ready** web application designed to help organizations make data-driven decisions between building custom solutions in-house versus purchasing existing products. The platform combines Monte Carlo simulation, advanced financial modeling, and professional Excel reporting to provide comprehensive analysis across multiple scenarios.
 
-🚀 **Ready for Production Deployment** - Configured for Render, Railway, and Heroku with zero-downtime deployment capabilities.
+🚀 **Ready for Production Deployment** - Configured for Render, Railway, and Heroku with zero-downtime deployment capabilities. ✨
 
 ### Key Features
 
