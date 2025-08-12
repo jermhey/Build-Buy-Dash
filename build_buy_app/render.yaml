@@ -3,11 +3,11 @@ services:
     name: build-buy-dashboard
     env: python
     plan: free
-    buildCommand: pip install -r build_buy_app/requirements.txt
-    startCommand: cd build_buy_app && python app.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app.server --bind 0.0.0.0:$PORT
     envVars:
       - key: PORT
         value: 8080
       - key: PYTHONPATH
-        value: /opt/render/project/src/build_buy_app
+        value: /opt/render/project/src
     healthCheckPath: /

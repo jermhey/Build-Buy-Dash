@@ -2,6 +2,7 @@
 Complete Build vs Buy Dashboard - Production Version
 Clean, maintainable architecture with separated concerns
 """
+import os
 import dash
 import pandas as pd
 from dash import html, dcc, Input, Output, State, dash_table, no_update, ALL
