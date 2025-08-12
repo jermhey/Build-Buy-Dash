@@ -35,7 +35,7 @@ class BuildVsBuyApp:
                                 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'],
             suppress_callback_exceptions=True,
             serve_locally=True,  # Serve assets locally to avoid loading issues
-            assets_ignore='.*\.map$'  # Ignore source map files that can cause conflicts
+            assets_ignore=r'.*\.map$'  # Ignore source map files that can cause conflicts
         )
         
         # Configure server settings for better asset handling
@@ -1335,6 +1335,9 @@ class BuildVsBuyApp:
 if __name__ == "__main__":
     app = BuildVsBuyApp()
     # Check if running in production
-    import os
     is_production = os.environ.get('PORT') is not None
     app.run(debug=not is_production, port=8060)
+else:
+    # For Gunicorn - create the app instance at module level
+    app = BuildVsBuyApp()
+    server = app.app.server
