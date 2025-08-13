@@ -51,6 +51,7 @@ class ExcelExporter:
     INPUT_SHEET = 'Input Parameters'
     TIMELINE_SHEET = 'Cost Timeline'
     SENSITIVITY_SHEET = 'Sensitivity Analysis'
+    BREAKEVEN_SHEET = 'Breakeven Analysis'
 
     def __init__(self):
         """Initialize the Excel exporter."""
@@ -93,6 +94,7 @@ class ExcelExporter:
                 self._create_input_parameters_sheet(workbook, formats, scenario_data)
                 self._create_cost_breakdown_timeline(workbook, formats, scenario_data)
                 self._create_sensitivity_analysis_sheet(workbook, formats, scenario_data)
+                self._create_breakeven_analysis_sheet(workbook, formats, scenario_data)
                 # Removed executive summary and methodology sheets per user request
             
             output.seek(0)
@@ -900,6 +902,348 @@ class ExcelExporter:
         # Protect the sheet but allow editing of interactive cells
         try:
             ws.protect('SensitivityAnalysis2024', {
+                'format_cells': False,
+                'format_columns': False,
+                'format_rows': False,
+                'insert_columns': False,
+                'insert_rows': False,
+                'insert_hyperlinks': False,
+                'delete_columns': False,
+                'delete_rows': False,
+                'select_locked_cells': True,
+                'sort': False,
+                'autofilter': False,
+                'pivot_tables': False,
+                'select_unlocked_cells': True
+            })
+        except Exception:
+            # If protection fails, continue without it
+            pass
+
+    def _create_breakeven_analysis_sheet(self, workbook, formats, scenario_data):
+        """Create breakeven analysis sheet with interactive controls and styling similar to sensitivity analysis."""
+        ws = workbook.add_worksheet(self.BREAKEVEN_SHEET)
+        
+        # Create special formats for interactive elements (consistent with sensitivity analysis)
+        interactive_format = workbook.add_format({
+            'bg_color': '#FFE6CC',  # Orange background (same as sensitivity)
+            'border': 1,
+            'align': 'center',
+            'bold': True,
+            'locked': False,  # Allow editing
+            'num_format': '0'
+        })
+        
+        interactive_currency_format = workbook.add_format({
+            'bg_color': '#FFE6CC',  # Orange background
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'locked': False,  # Allow editing
+            'num_format': '$#,##0'
+        })
+        
+        breakeven_result_format = workbook.add_format({
+            'bg_color': '#E6F3FF',  # Light blue background (same as sensitivity)
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'num_format': '$#,##0'
+        })
+        
+        # Sheet title and description
+        ws.merge_range('A1:F1', '⚖️ Breakeven Analysis - Find the Tipping Point', formats['header'])
+        ws.write_string(2, 0, 'Determine the exact values where Build vs Buy decision changes', formats['text'])
+        
+        # Extract base parameters from scenario data
+        base_params = {
+            'build_timeline': safe_float(scenario_data.get('build_timeline', 12)),
+            'fte_cost': safe_float(scenario_data.get('fte_cost', 150000)),
+            'fte_count': safe_float(scenario_data.get('fte_count', 2)),
+            'prob_success': safe_float(scenario_data.get('prob_success', 80)),
+            'wacc': safe_float(scenario_data.get('wacc', 8)),
+            'tech_risk': safe_float(scenario_data.get('tech_risk', 0)),
+            'vendor_risk': safe_float(scenario_data.get('vendor_risk', 0)),
+            'market_risk': safe_float(scenario_data.get('market_risk', 0)),
+            'misc_costs': safe_float(scenario_data.get('misc_costs', 0)),
+            'product_price': safe_float(scenario_data.get('product_price', 0)),
+            'subscription_price': safe_float(scenario_data.get('subscription_price', 0))
+        }
+        
+        buy_cost = base_params['product_price'] + base_params['subscription_price']
+        
+        # ===========================================
+        # SECTION 1: CURRENT SCENARIO BASELINE
+        # ===========================================
+        row = 4
+        ws.merge_range(f'A{row}:E{row}', '📊 CURRENT SCENARIO BASELINE', formats['subheader'])
+        row += 1
+        
+        # Current build cost calculation
+        ws.write_string(row, 0, 'Current Build Cost (PV)', formats['text_bold'])
+        combined_risk = base_params['tech_risk'] + base_params['vendor_risk'] + base_params['market_risk']
+        current_build_cost = ((base_params['build_timeline']/12) * base_params['fte_cost'] * 
+                             base_params['fte_count'] / (base_params['prob_success']/100) + 
+                             base_params['misc_costs']) * (1 + combined_risk/100)
+        ws.write_number(row, 1, current_build_cost, formats['currency_bold'])
+        current_build_cell = f'B{row+1}'
+        row += 1
+        
+        # Current buy cost
+        ws.write_string(row, 0, 'Current Buy Cost', formats['text_bold'])
+        ws.write_number(row, 1, buy_cost, formats['currency_bold'])
+        current_buy_cell = f'B{row+1}'
+        row += 1
+        
+        # Current difference
+        ws.write_string(row, 0, 'Current Difference (Build - Buy)', formats['text_bold'])
+        current_diff_formula = f'={current_build_cell}-{current_buy_cell}'
+        ws.write_formula(row, 1, safe_formula(current_diff_formula), formats['currency_bold'])
+        current_diff_cell = f'B{row+1}'
+        row += 1
+        
+        # Current recommendation
+        ws.write_string(row, 0, 'Current Recommendation', formats['text_bold'])
+        current_rec_formula = f'=IF({current_diff_cell}<0,"BUILD","BUY")'
+        ws.write_formula(row, 1, safe_formula(current_rec_formula), formats['text_bold'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 2: BREAKEVEN PARAMETER ANALYSIS
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '🎯 BREAKEVEN PARAMETER ANALYSIS', formats['subheader'])
+        row += 1
+        
+        ws.write_string(row, 0, 'Find the exact parameter value where Build cost equals Buy cost', formats['text'])
+        row += 2
+        
+        # Headers
+        ws.write_string(row, 0, 'Parameter', formats['text_bold'])
+        ws.write_string(row, 1, 'Current Value', formats['text_bold'])
+        ws.write_string(row, 2, 'Breakeven Value', formats['text_bold'])
+        ws.write_string(row, 3, 'Change Required', formats['text_bold'])
+        ws.write_string(row, 4, 'Interpretation', formats['text_bold'])
+        row += 1
+        
+        # Store breakeven calculation cells for easy reference
+        breakeven_cells = {}
+        
+        # 1. Timeline Breakeven
+        ws.write_string(row, 0, 'Build Timeline (months)', formats['text'])
+        ws.write_number(row, 1, base_params['build_timeline'], interactive_format)
+        
+        # Calculate breakeven timeline: solve for timeline where build cost = buy cost
+        # Formula: buy_cost = (timeline/12) * fte_cost * fte_count / (prob_success/100) * (1 + risk/100) + misc_costs
+        timeline_breakeven = (buy_cost - base_params['misc_costs']) / (
+            (base_params['fte_cost'] * base_params['fte_count'] / (base_params['prob_success']/100)) * 
+            (1 + combined_risk/100) / 12
+        )
+        ws.write_number(row, 2, max(0, timeline_breakeven), breakeven_result_format)
+        breakeven_cells['timeline'] = f'C{row+1}'
+        
+        timeline_change_formula = f'={breakeven_cells["timeline"]}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(timeline_change_formula), formats['currency'])
+        
+        timeline_interp_formula = f'=IF({breakeven_cells["timeline"]}>B{row+1},"Can afford "& ROUND(({breakeven_cells["timeline"]}-B{row+1}),1) &" more months","Need to reduce by "& ROUND((B{row+1}-{breakeven_cells["timeline"]}),1) &" months")'
+        ws.write_formula(row, 4, safe_formula(timeline_interp_formula), formats['text'])
+        row += 1
+        
+        # 2. FTE Cost Breakeven
+        ws.write_string(row, 0, 'FTE Cost (annual)', formats['text'])
+        ws.write_number(row, 1, base_params['fte_cost'], interactive_currency_format)
+        
+        # Calculate breakeven FTE cost
+        fte_cost_breakeven = (buy_cost - base_params['misc_costs']) / (
+            (base_params['build_timeline']/12) * base_params['fte_count'] / (base_params['prob_success']/100) * 
+            (1 + combined_risk/100)
+        )
+        ws.write_number(row, 2, max(0, fte_cost_breakeven), breakeven_result_format)
+        breakeven_cells['fte_cost'] = f'C{row+1}'
+        
+        fte_change_formula = f'={breakeven_cells["fte_cost"]}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(fte_change_formula), formats['currency'])
+        
+        fte_interp_formula = f'=IF({breakeven_cells["fte_cost"]}>B{row+1},"Can afford $"& ROUND(({breakeven_cells["fte_cost"]}-B{row+1}),0) &" more per FTE","Need to reduce by $"& ROUND((B{row+1}-{breakeven_cells["fte_cost"]}),0) &" per FTE")'
+        ws.write_formula(row, 4, safe_formula(fte_interp_formula), formats['text'])
+        row += 1
+        
+        # 3. Team Size Breakeven
+        ws.write_string(row, 0, 'Team Size (FTEs)', formats['text'])
+        ws.write_number(row, 1, base_params['fte_count'], interactive_format)
+        
+        # Calculate breakeven team size
+        team_breakeven = (buy_cost - base_params['misc_costs']) / (
+            (base_params['build_timeline']/12) * base_params['fte_cost'] / (base_params['prob_success']/100) * 
+            (1 + combined_risk/100)
+        )
+        ws.write_number(row, 2, max(0, team_breakeven), breakeven_result_format)
+        breakeven_cells['team_size'] = f'C{row+1}'
+        
+        team_change_formula = f'={breakeven_cells["team_size"]}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(team_change_formula), formats['number'])
+        
+        team_interp_formula = f'=IF({breakeven_cells["team_size"]}>B{row+1},"Can afford "& ROUND(({breakeven_cells["team_size"]}-B{row+1}),1) &" more FTEs","Need to reduce by "& ROUND((B{row+1}-{breakeven_cells["team_size"]}),1) &" FTEs")'
+        ws.write_formula(row, 4, safe_formula(team_interp_formula), formats['text'])
+        row += 1
+        
+        # 4. Success Probability Breakeven
+        ws.write_string(row, 0, 'Success Probability (%)', formats['text'])
+        ws.write_number(row, 1, base_params['prob_success'], interactive_format)
+        
+        # Calculate breakeven success probability
+        # Rearrange: buy_cost = base_labor_cost / (prob_success/100) * (1 + risk) + misc
+        base_labor_cost = (base_params['build_timeline']/12) * base_params['fte_cost'] * base_params['fte_count']
+        success_breakeven = base_labor_cost * (1 + combined_risk/100) / (buy_cost - base_params['misc_costs']) * 100
+        ws.write_number(row, 2, min(100, max(0, success_breakeven)), breakeven_result_format)
+        breakeven_cells['success_prob'] = f'C{row+1}'
+        
+        success_change_formula = f'={breakeven_cells["success_prob"]}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(success_change_formula), formats['number'])
+        
+        success_interp_formula = f'=IF({breakeven_cells["success_prob"]}>B{row+1},"Need "& ROUND(({breakeven_cells["success_prob"]}-B{row+1}),1) &"% higher confidence","Can tolerate "& ROUND((B{row+1}-{breakeven_cells["success_prob"]}),1) &"% lower confidence")'
+        ws.write_formula(row, 4, safe_formula(success_interp_formula), formats['text'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 3: BUY COST SCENARIOS
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '💰 BUY COST SCENARIOS', formats['subheader'])
+        row += 1
+        
+        ws.write_string(row, 0, 'Test different buy cost scenarios to see when the decision flips', formats['text'])
+        row += 2
+        
+        # Headers
+        ws.write_string(row, 0, 'Buy Cost Scenario', formats['text_bold'])
+        ws.write_string(row, 1, 'Buy Cost ($)', formats['text_bold'])
+        ws.write_string(row, 2, 'Build Cost ($)', formats['text_bold'])
+        ws.write_string(row, 3, 'Difference ($)', formats['text_bold'])
+        ws.write_string(row, 4, 'Recommendation', formats['text_bold'])
+        row += 1
+        
+        # Build cost reference for all scenarios
+        build_cost_ref = current_build_cost
+        
+        # Current scenario
+        ws.write_string(row, 0, 'Current Buy Cost', formats['text'])
+        ws.write_number(row, 1, buy_cost, interactive_currency_format)
+        ws.write_number(row, 2, build_cost_ref, formats['currency'])
+        current_scenario_diff = f'=C{row+1}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(current_scenario_diff), formats['currency'])
+        current_scenario_rec = f'=IF(C{row+1}<B{row+1},"BUILD","BUY")'
+        ws.write_formula(row, 4, safe_formula(current_scenario_rec), formats['text_bold'])
+        row += 1
+        
+        # 25% lower buy cost
+        low_buy_cost = buy_cost * 0.75
+        ws.write_string(row, 0, '25% Lower Buy Cost', formats['text'])
+        ws.write_number(row, 1, low_buy_cost, formats['currency'])
+        ws.write_number(row, 2, build_cost_ref, formats['currency'])
+        low_diff = f'=C{row+1}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(low_diff), formats['currency'])
+        low_rec = f'=IF(C{row+1}<B{row+1},"BUILD","BUY")'
+        ws.write_formula(row, 4, safe_formula(low_rec), formats['text_bold'])
+        row += 1
+        
+        # 25% higher buy cost
+        high_buy_cost = buy_cost * 1.25
+        ws.write_string(row, 0, '25% Higher Buy Cost', formats['text'])
+        ws.write_number(row, 1, high_buy_cost, formats['currency'])
+        ws.write_number(row, 2, build_cost_ref, formats['currency'])
+        high_diff = f'=C{row+1}-B{row+1}'
+        ws.write_formula(row, 3, safe_formula(high_diff), formats['currency'])
+        high_rec = f'=IF(C{row+1}<B{row+1},"BUILD","BUY")'
+        ws.write_formula(row, 4, safe_formula(high_rec), formats['text_bold'])
+        row += 1
+        
+        # Exact breakeven buy cost
+        ws.write_string(row, 0, 'Exact Breakeven', formats['text_bold'])
+        ws.write_number(row, 1, build_cost_ref, breakeven_result_format)
+        ws.write_number(row, 2, build_cost_ref, formats['currency'])
+        ws.write_number(row, 3, 0, formats['currency_bold'])
+        ws.write_string(row, 4, 'INDIFFERENT', formats['text_bold'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 4: SENSITIVITY TO COMBINED RISKS
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '⚠️ RISK TOLERANCE ANALYSIS', formats['subheader'])
+        row += 1
+        
+        ws.write_string(row, 0, 'How much total risk can the build option absorb before buy becomes better?', formats['text'])
+        row += 2
+        
+        # Calculate maximum allowable risk
+        base_cost_no_risk = (base_params['build_timeline']/12) * base_params['fte_cost'] * base_params['fte_count'] / (base_params['prob_success']/100) + base_params['misc_costs']
+        max_risk_multiplier = buy_cost / base_cost_no_risk
+        max_allowable_risk = max(0, (max_risk_multiplier - 1) * 100)
+        
+        ws.write_string(row, 0, 'Base Cost (no risk)', formats['text_bold'])
+        ws.write_number(row, 1, base_cost_no_risk, formats['currency'])
+        row += 1
+        
+        ws.write_string(row, 0, 'Maximum Risk Tolerance', formats['text_bold'])
+        ws.write_number(row, 1, max_allowable_risk, breakeven_result_format)
+        ws.write_string(row, 2, '% (combined tech + vendor + market)', formats['text'])
+        row += 1
+        
+        ws.write_string(row, 0, 'Current Risk Level', formats['text_bold'])
+        ws.write_number(row, 1, combined_risk, formats['currency'])
+        ws.write_string(row, 2, '% (current combined risk)', formats['text'])
+        row += 1
+        
+        ws.write_string(row, 0, 'Risk Headroom', formats['text_bold'])
+        risk_headroom = max_allowable_risk - combined_risk
+        ws.write_number(row, 1, risk_headroom, breakeven_result_format)
+        headroom_interpretation = f'=IF({risk_headroom}>0,"Can absorb "&ROUND({risk_headroom},1)&"% more risk","Over risk limit by "&ROUND(ABS({risk_headroom}),1)&"%")'
+        ws.write_formula(row, 2, safe_formula(headroom_interpretation), formats['text'])
+        row += 2
+        
+        # ===========================================
+        # SECTION 5: INSTRUCTIONS AND KEY INSIGHTS
+        # ===========================================
+        ws.merge_range(f'A{row}:E{row}', '📋 KEY INSIGHTS & INTERPRETATION', formats['subheader'])
+        row += 1
+        
+        insights = [
+            "🎯 Breakeven Values: The exact parameter values where Build = Buy",
+            "📊 Change Required: How much each parameter needs to shift to flip the decision",
+            "💡 Risk Tolerance: Maximum combined risk the build option can absorb",
+            "⚖️ Decision Sensitivity: Parameters closest to their breakeven values are most critical",
+            "🔄 Use orange cells to test 'what-if' scenarios in real-time"
+        ]
+        
+        for insight in insights:
+            ws.write_string(row, 0, insight, formats['text'])
+            row += 1
+        
+        row += 1
+        ws.write_string(row, 0, 'Strategic Recommendations:', formats['text_bold'])
+        row += 1
+        
+        recommendations = [
+            "• Focus risk mitigation on parameters closest to breakeven values",
+            "• If risk headroom is negative, consider buy option or reduce risk factors",
+            "• Monitor market conditions for buy cost changes that could flip the decision",
+            "• Use scenarios to stress-test your assumptions before final decision"
+        ]
+        
+        for recommendation in recommendations:
+            ws.write_string(row, 0, recommendation, formats['text'])
+            row += 1
+        
+        # ===========================================
+        # COLUMN FORMATTING AND PROTECTION
+        # ===========================================
+        ws.set_column('A:A', 25)  # Parameter labels
+        ws.set_column('B:B', 15)  # Current values
+        ws.set_column('C:C', 15)  # Breakeven values
+        ws.set_column('D:D', 15)  # Change required
+        ws.set_column('E:E', 35)  # Interpretation (wider for text)
+        
+        # Protect the sheet but allow editing of interactive cells
+        try:
+            ws.protect('BreakevenAnalysis2024', {
                 'format_cells': False,
                 'format_columns': False,
                 'format_rows': False,
