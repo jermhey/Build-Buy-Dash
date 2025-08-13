@@ -3,17 +3,31 @@ Complete Build vs Buy Dashboard - Production Version
 Clean, maintainable architecture with separated concerns
 """
 import os
+import sys
 import dash
 import pandas as pd
 from dash import html, dcc, Input, Output, State, dash_table, no_update, ALL
 import dash_bootstrap_components as dbc
-from ui.modern_ui import ModernUI
-from core.excel_export import ExcelExporter
-from data.config_manager import app_config, user_prefs, template_manager
-from data.scenario_manager import scenario_manager, ScenarioComparison
-from core.advanced_analytics import AdvancedAnalytics, ReportGenerator
-from src.simulation import BuildVsBuySimulator
-from config.security import security_config, secure_app_initialization, safe_input_handler
+
+# Handle both direct execution and module execution
+try:
+    # Try relative imports first (when run as module)
+    from .ui.modern_ui import ModernUI
+    from .core.excel_export import ExcelExporter
+    from .data.config_manager import app_config, user_prefs, template_manager
+    from .data.scenario_manager import scenario_manager, ScenarioComparison
+    from .core.advanced_analytics import AdvancedAnalytics, ReportGenerator
+    from .src.simulation import BuildVsBuySimulator
+    from .config.security import security_config, secure_app_initialization, safe_input_handler
+except ImportError:
+    # Fall back to absolute imports (when run directly)
+    from ui.modern_ui import ModernUI
+    from core.excel_export import ExcelExporter
+    from data.config_manager import app_config, user_prefs, template_manager
+    from data.scenario_manager import scenario_manager, ScenarioComparison
+    from core.advanced_analytics import AdvancedAnalytics, ReportGenerator
+    from src.simulation import BuildVsBuySimulator
+    from config.security import security_config, secure_app_initialization, safe_input_handler
 import plotly.graph_objects as go
 
 

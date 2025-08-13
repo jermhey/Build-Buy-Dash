@@ -45,6 +45,16 @@ def safe_formula(formula):
     return formula
 
 
+def safe_divide(numerator, denominator, default=0.0):
+    """Safely divide two numbers, returning default if denominator is zero."""
+    try:
+        if denominator == 0 or denominator is None:
+            return default
+        return numerator / denominator
+    except (TypeError, ZeroDivisionError):
+        return default
+
+
 class ExcelExporter:
     """Fixed Excel export builder for Build vs Buy analysis."""
 
@@ -1038,11 +1048,21 @@ class ExcelExporter:
             (base_params['fte_cost'] * base_params['fte_count'] / (base_params['prob_success']/100)) * 
             (1 + combined_risk/100) / 12
         )
-        ws.write_number(row, 2, max(0, timeline_breakeven), breakeven_result_format)
+        
+        # Use number format for timeline (months, not currency)
+        timeline_format = workbook.add_format({
+            'bg_color': '#E6F3FF',
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'num_format': '0.0'  # Show as decimal number, not currency
+        })
+        
+        ws.write_number(row, 2, max(0, timeline_breakeven), timeline_format)
         breakeven_cells['timeline'] = f'C{row+1}'
         
         timeline_change_formula = f'={breakeven_cells["timeline"]}-B{row+1}'
-        ws.write_formula(row, 3, safe_formula(timeline_change_formula), formats['currency'])
+        ws.write_formula(row, 3, safe_formula(timeline_change_formula), formats['number'])
         
         timeline_interp_formula = f'=IF({breakeven_cells["timeline"]}>B{row+1},"Can afford "& ROUND(({breakeven_cells["timeline"]}-B{row+1}),1) &" more months","Need to reduce by "& ROUND((B{row+1}-{breakeven_cells["timeline"]}),1) &" months")'
         ws.write_formula(row, 4, safe_formula(timeline_interp_formula), formats['text'])
@@ -1076,7 +1096,17 @@ class ExcelExporter:
             (base_params['build_timeline']/12) * base_params['fte_cost'] / (base_params['prob_success']/100) * 
             (1 + combined_risk/100)
         )
-        ws.write_number(row, 2, max(0, team_breakeven), breakeven_result_format)
+        
+        # Use number format for team size (people, not currency)
+        team_format = workbook.add_format({
+            'bg_color': '#E6F3FF',
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'num_format': '0.0'  # Show as decimal number, not currency
+        })
+        
+        ws.write_number(row, 2, max(0, team_breakeven), team_format)
         breakeven_cells['team_size'] = f'C{row+1}'
         
         team_change_formula = f'={breakeven_cells["team_size"]}-B{row+1}'
@@ -1093,8 +1123,21 @@ class ExcelExporter:
         # Calculate breakeven success probability
         # Rearrange: buy_cost = base_labor_cost / (prob_success/100) * (1 + risk) + misc
         base_labor_cost = (base_params['build_timeline']/12) * base_params['fte_cost'] * base_params['fte_count']
-        success_breakeven = base_labor_cost * (1 + combined_risk/100) / (buy_cost - base_params['misc_costs']) * 100
-        ws.write_number(row, 2, min(100, max(0, success_breakeven)), breakeven_result_format)
+        
+        # Handle division by zero case safely
+        denominator = buy_cost - base_params['misc_costs']
+        success_breakeven = safe_divide(base_labor_cost * (1 + combined_risk/100) * 100, denominator, 0.0)
+        
+        # Use percentage format for success probability
+        percent_format = workbook.add_format({
+            'bg_color': '#E6F3FF',
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'num_format': '0.0'  # Show as percentage number, not currency
+        })
+        
+        ws.write_number(row, 2, min(100, max(0, success_breakeven)), percent_format)
         breakeven_cells['success_prob'] = f'C{row+1}'
         
         success_change_formula = f'={breakeven_cells["success_prob"]}-B{row+1}'
@@ -1182,19 +1225,28 @@ class ExcelExporter:
         ws.write_number(row, 1, base_cost_no_risk, formats['currency'])
         row += 1
         
+        # Use percentage format for risk tolerance
+        risk_percent_format = workbook.add_format({
+            'bg_color': '#E6F3FF',
+            'border': 1,
+            'align': 'right',
+            'bold': True,
+            'num_format': '0.0'  # Show as percentage number
+        })
+        
         ws.write_string(row, 0, 'Maximum Risk Tolerance', formats['text_bold'])
-        ws.write_number(row, 1, max_allowable_risk, breakeven_result_format)
+        ws.write_number(row, 1, max_allowable_risk, risk_percent_format)
         ws.write_string(row, 2, '% (combined tech + vendor + market)', formats['text'])
         row += 1
         
         ws.write_string(row, 0, 'Current Risk Level', formats['text_bold'])
-        ws.write_number(row, 1, combined_risk, formats['currency'])
+        ws.write_number(row, 1, combined_risk, risk_percent_format)
         ws.write_string(row, 2, '% (current combined risk)', formats['text'])
         row += 1
         
         ws.write_string(row, 0, 'Risk Headroom', formats['text_bold'])
         risk_headroom = max_allowable_risk - combined_risk
-        ws.write_number(row, 1, risk_headroom, breakeven_result_format)
+        ws.write_number(row, 1, risk_headroom, risk_percent_format)
         headroom_interpretation = f'=IF({risk_headroom}>0,"Can absorb "&ROUND({risk_headroom},1)&"% more risk","Over risk limit by "&ROUND(ABS({risk_headroom}),1)&"%")'
         ws.write_formula(row, 2, safe_formula(headroom_interpretation), formats['text'])
         row += 2
