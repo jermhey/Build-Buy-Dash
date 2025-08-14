@@ -3,6 +3,8 @@ Fixed Excel Export Module for Build vs Buy Dashboard
 Addresses formula corruption issues causing Excel repair warnings
 """
 import xlsxwriter
+import zipfile
+import re
 from io import BytesIO
 from datetime import datetime
 
@@ -112,6 +114,89 @@ class ExcelExporter:
             
         except Exception as e:
             print(f"Error creating Excel export: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def create_multiple_scenario_exports(self, stored_scenarios):
+        """
+        Create separate Excel files for each saved scenario.
+        
+        Args:
+            stored_scenarios: List of stored scenario dictionaries
+            
+        Returns:
+            List of (filename, file_bytes) tuples for download
+        """
+        exports = []
+        
+        if not stored_scenarios:
+            return exports
+        
+        for scenario in stored_scenarios:
+            try:
+                # Extract scenario name for filename
+                scenario_name = scenario.get('name', 'Unnamed_Scenario')
+                
+                # Clean scenario name for filename (remove invalid characters)
+                clean_name = re.sub(r'[<>:"/\\|?*]', '_', scenario_name)
+                clean_name = clean_name.strip()[:50]  # Limit length
+                
+                if not clean_name:
+                    clean_name = "Unnamed_Scenario"
+                
+                # Create timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                # Build filename: "ScenarioName_BuildVsBuyAnalysis_20250814_143022.xlsx"
+                filename = f"{clean_name}_BuildVsBuyAnalysis_{timestamp}.xlsx"
+                
+                # Generate Excel file using existing function
+                excel_bytes = self.create_excel_export(scenario)
+                
+                if excel_bytes:
+                    exports.append((filename, excel_bytes))
+                    print(f"✅ Created Excel file for scenario: {scenario_name}")
+                else:
+                    print(f"❌ Failed to create Excel file for scenario: {scenario_name}")
+                    
+            except Exception as e:
+                print(f"Error processing scenario {scenario.get('name', 'Unknown')}: {e}")
+                continue
+        
+        return exports
+    
+    def create_scenarios_zip(self, stored_scenarios):
+        """
+        Create a ZIP file containing Excel files for all scenarios.
+        
+        Args:
+            stored_scenarios: List of stored scenario dictionaries
+            
+        Returns:
+            bytes: ZIP file as bytes, or None if error
+        """
+        try:
+            # Get all Excel exports
+            exports = self.create_multiple_scenario_exports(stored_scenarios)
+            
+            if not exports:
+                print("No Excel files were created successfully")
+                return None
+            
+            # Create ZIP file in memory
+            zip_buffer = BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for filename, excel_bytes in exports:
+                    zip_file.writestr(filename, excel_bytes)
+            
+            zip_buffer.seek(0)
+            print(f"✅ Created ZIP file with {len(exports)} Excel files")
+            return zip_buffer.getvalue()
+            
+        except Exception as e:
+            print(f"Error creating scenarios ZIP: {e}")
             import traceback
             traceback.print_exc()
             return None

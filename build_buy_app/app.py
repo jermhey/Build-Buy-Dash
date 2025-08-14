@@ -4,6 +4,7 @@ Clean, maintainable architecture with separated concerns
 """
 import os
 import sys
+import re
 import dash
 import pandas as pd
 from dash import html, dcc, Input, Output, State, dash_table, no_update, ALL
@@ -241,13 +242,30 @@ class BuildVsBuyApp:
                           product_price, subscription_price, subscription_increase,
                           tech_risk, vendor_risk, market_risk,
                           maint_opex, maint_opex_std, maint_escalation, capex, amortization):
-            """Generate and download Excel report using the most recent scenario."""
+            """Generate and download Excel report(s) - single file or ZIP with multiple scenarios."""
             if not n_clicks:
                 return no_update
             
             try:
                 print(f"Excel export button clicked. Stored scenarios count: {len(stored_scenarios) if stored_scenarios else 0}")
                 
+                # Check if we have multiple scenarios to export
+                if stored_scenarios and len(stored_scenarios) > 1:
+                    # Multiple scenarios - create ZIP file
+                    print(f"Creating ZIP file with {len(stored_scenarios)} scenarios")
+                    
+                    zip_data = self.excel_exporter.create_scenarios_zip(stored_scenarios)
+                    
+                    if zip_data:
+                        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                        filename = f"BuildVsBuy_Scenarios_{timestamp}.zip"
+                        print(f"ZIP export successful, filename: {filename}")
+                        return dcc.send_bytes(zip_data, filename)
+                    else:
+                        print("ZIP export failed - falling back to single scenario")
+                        # Fall through to single scenario export
+                
+                # Single scenario export
                 # Use the most recent scenario from the table if available
                 if stored_scenarios and len(stored_scenarios) > 0:
                     # Get the most recent scenario (last in the list)
@@ -352,14 +370,20 @@ class BuildVsBuyApp:
                         'amortization': safe_float(amortization, 0)
                     }
                 
-                print(f"Creating Excel export with scenario: {scenario_data['name']}")
+                print(f"Creating single Excel export with scenario: {scenario_data['name']}")
                 
-                # Create Excel export (note: we no longer pass stored_scenarios since we removed those sheets)
+                # Create single Excel export
                 excel_data = self.excel_exporter.create_excel_export(scenario_data)
                 
                 if excel_data:
-                    filename = f"BuildVsBuy_Analysis_{scenario_data['timestamp']}.xlsx"
-                    print(f"Excel export successful, filename: {filename}")
+                    # Use the scenario name in filename for single exports
+                    clean_name = re.sub(r'[<>:"/\\|?*]', '_', scenario_data['name'])
+                    clean_name = clean_name.strip()[:30]  # Limit length
+                    if not clean_name:
+                        clean_name = "BuildVsBuy_Analysis"
+                    
+                    filename = f"{clean_name}_{scenario_data['timestamp']}.xlsx"
+                    print(f"Single Excel export successful, filename: {filename}")
                     return dcc.send_bytes(excel_data, filename)
                 else:
                     print("Excel export returned None - check excel_export.py for errors")
