@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: build-buy-dashboard
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: "gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 30"
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: PYTHONPATH
+        value: /opt/render/project/src
