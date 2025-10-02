@@ -62,18 +62,25 @@ class DashSecurityConfig:
     def configure_server_security(self, server: Flask):
         """Configure Flask server security settings."""
         
-        # Remove server signature
+        # Remove server signature for security by obscurity
         server.config['SERVER_NAME'] = None
         
-        # Session security
+        # Session security (hardened)
         server.config['SESSION_COOKIE_SECURE'] = self.is_production
         server.config['SESSION_COOKIE_HTTPONLY'] = True
-        server.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+        server.config['SESSION_COOKIE_SAMESITE'] = 'Strict'  # Changed from 'Lax' to 'Strict' for better security
+        server.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour session timeout
+        
+        # Additional security settings
+        server.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+        server.config['TRAP_HTTP_EXCEPTIONS'] = True  # Better error handling
+        server.config['TRAP_BAD_REQUEST_ERRORS'] = True  # Catch bad requests
         
         # Disable Flask debug in production
         if self.is_production:
             server.config['DEBUG'] = False
             server.config['TESTING'] = False
+            server.config['PROPAGATE_EXCEPTIONS'] = False  # Don't expose stack traces
         
         return server
     

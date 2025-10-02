@@ -50,10 +50,41 @@ class ScenarioManager:
     """Manage scenario persistence and operations."""
     
     def __init__(self, storage_dir: str = "scenarios"):
-        self.storage_dir = Path(storage_dir)
+        self.storage_dir = Path(storage_dir).resolve()  # Resolve to absolute path
         self.storage_dir.mkdir(exist_ok=True)
         self.metadata_file = self.storage_dir / "metadata.json"
         self.metadata = self._load_metadata()
+    
+    def _validate_scenario_id(self, scenario_id: str) -> bool:
+        """
+        Validate scenario ID to prevent path traversal attacks.
+        Only allow UUID format (alphanumeric and hyphens).
+        """
+        if not scenario_id:
+            return False
+        # UUID format: 8-4-4-4-12 hexadecimal digits
+        pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+        return bool(re.match(pattern, scenario_id.lower()))
+    
+    def _get_safe_path(self, scenario_id: str) -> Optional[Path]:
+        """
+        Get safe file path for scenario, preventing path traversal.
+        Returns None if scenario_id is invalid or path is outside storage_dir.
+        """
+        if not self._validate_scenario_id(scenario_id):
+            print(f"Security: Invalid scenario ID format: {scenario_id}")
+            return None
+        
+        scenario_path = (self.storage_dir / f"{scenario_id}.json").resolve()
+        
+        # Ensure the resolved path is within storage_dir (prevents path traversal)
+        try:
+            scenario_path.relative_to(self.storage_dir)
+        except ValueError:
+            print(f"Security: Path traversal attempt detected: {scenario_id}")
+            return None
+        
+        return scenario_path
     
     def _load_metadata(self) -> Dict[str, Dict]:
         """Load scenario metadata."""
@@ -120,14 +151,14 @@ class ScenarioManager:
             return ""
     
     def load_scenario(self, scenario_id: str) -> Optional[Dict[str, Any]]:
-        """Load a scenario by ID."""
-        scenario_file = self.storage_dir / f"{scenario_id}.json"
+        """Load a scenario by ID with path traversal protection."""
+        scenario_file = self._get_safe_path(scenario_id)
         
-        if not scenario_file.exists():
+        if not scenario_file or not scenario_file.exists():
             return None
         
         try:
-            with open(scenario_file, 'r') as f:
+            with open(scenario_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             print(f"Error loading scenario: {e}")
@@ -153,8 +184,11 @@ class ScenarioManager:
         return scenarios
     
     def delete_scenario(self, scenario_id: str) -> bool:
-        """Delete a scenario."""
-        scenario_file = self.storage_dir / f"{scenario_id}.json"
+        """Delete a scenario with path traversal protection."""
+        scenario_file = self._get_safe_path(scenario_id)
+        
+        if not scenario_file:
+            return False
         
         try:
             if scenario_file.exists():
