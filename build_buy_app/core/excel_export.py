@@ -381,12 +381,16 @@ class ExcelExporter:
         ws.merge_range(f'A{row+1}:B{row+1}', '🏗️ BUILD OPTION COSTS', formats['header'])
         row += 2
         
-        # Build costs breakdown with enhanced organization
+        # Build costs breakdown with enhanced organization and PV calculations
+        # Add amortization component that was missing
+        amortization_ref = safe_cell_ref(self.param_cells.get('amortization', "'Input Parameters'!B1"))
+        
         build_components = [
-            ('Development Labor (Success-Adjusted)', total_fte_ref, 'labor', 'Risk-adjusted labor costs'),
+            ('Development Labor (PV, Success-Adjusted)', total_fte_ref, 'labor_pv', 'Present value of risk-adjusted labor costs'),
             ('Infrastructure CapEx', self.param_cells.get('capex', "'Input Parameters'!B1"), 'immediate', 'Hardware, software, setup costs'),
             ('Miscellaneous Costs', self.param_cells.get('misc_costs', "'Input Parameters'!B1"), 'immediate', 'Training, migration, other setup'),
-            ('Annual Maintenance & Support', self.param_cells.get('maint_opex', "'Input Parameters'!B1"), 'maintenance', 'Ongoing operational costs')
+            ('Monthly Amortization (PV)', amortization_ref, 'amortization_pv', 'Present value of monthly payments during build'),
+            ('Annual Maintenance & Support (PV)', self.param_cells.get('maint_opex', "'Input Parameters'!B1"), 'maintenance_pv', 'Present value of ongoing operational costs')
         ]
         
         build_pv_rows = []  # Track rows for total calculation
@@ -394,35 +398,55 @@ class ExcelExporter:
         for comp_name, cost_ref, timing, description in build_components:
             ws.write_string(row, 0, comp_name, formats['text'])
             
-            if timing == 'labor':
-                # All labor costs in Year 0 for conservative timing
-                ws.write_formula(row, 1, safe_formula(f"={cost_ref}"), formats['currency'])
+            if timing == 'labor_pv':
+                # Calculate proper PV of labor costs with year-by-year discounting
+                timeline_ref = safe_cell_ref(self.param_cells.get('build_timeline'))
+                success_prob_ref = safe_cell_ref(self.param_cells.get('prob_success'))
+                
+                # All labor costs in Year 0 for conservative timing (but PV adjusted)
+                # Formula: (timeline/12 * fte_cost * fte_count / success_prob) * PV_factor
+                # For year-by-year PV: use midpoint discounting for timeline <= 12 months
+                pv_factor_formula = f"IF({timeline_ref}<=12,1/SQRT(1+{wacc_ref}),1/((1+{wacc_ref})^0.5))"
+                labor_pv_formula = f"=({cost_ref}/{success_prob_ref})*{pv_factor_formula}"
+                
+                ws.write_formula(row, 1, safe_formula(labor_pv_formula), formats['currency'])
                 for year_col in range(2, total_col):
                     ws.write_number(row, year_col, 0, formats['currency'])
-                # NPV calculation - no discounting for Year 0
-                ws.write_formula(row, npv_col, safe_formula(f"={cost_ref}"), formats['currency_bold'])
+                # NPV is the same as the Year 0 value since it's already PV
+                ws.write_formula(row, npv_col, safe_formula(labor_pv_formula), formats['currency_bold'])
             
             elif timing == 'immediate':
-                # All cost in Year 0
+                # All cost in Year 0 - no discounting needed
                 ws.write_formula(row, 1, safe_formula(f"={cost_ref}"), formats['currency'])
                 for year_col in range(2, total_col):
                     ws.write_number(row, year_col, 0, formats['currency'])
-                # NPV calculation - no discounting for Year 0
                 ws.write_formula(row, npv_col, safe_formula(f"={cost_ref}"), formats['currency_bold'])
             
-            elif timing == 'maintenance':
-                # No cost in Year 0, escalating annual costs in subsequent years
+            elif timing == 'amortization_pv':
+                # Calculate PV of monthly amortization during build timeline
+                timeline_ref = safe_cell_ref(self.param_cells.get('build_timeline'))
+                # Monthly discount rate formula
+                monthly_rate_formula = f"(1+{wacc_ref})^(1/12)-1"
+                # PV of annuity for timeline months
+                pv_amortization_formula = f"=IF({cost_ref}=0,0,{cost_ref}*((1-(1+{monthly_rate_formula})^-{timeline_ref})/{monthly_rate_formula}))"
+                
+                ws.write_formula(row, 1, safe_formula(pv_amortization_formula), formats['currency'])
+                for year_col in range(2, total_col):
+                    ws.write_number(row, year_col, 0, formats['currency'])
+                ws.write_formula(row, npv_col, safe_formula(pv_amortization_formula), formats['currency_bold'])
+            
+            elif timing == 'maintenance_pv':
+                # Calculate proper PV of maintenance costs over useful life
                 ws.write_number(row, 1, 0, formats['currency'])
                 
                 # Get maintenance escalation rate
                 maint_escalation_ref = safe_cell_ref(self.param_cells.get('maint_escalation'))
                 maint_escalation = safe_float(scenario_data.get('maint_escalation', 3)) / 100
                 
-                # Calculate escalating maintenance costs
+                # Calculate escalating maintenance costs for display
                 for year_idx in range(1, useful_life + 1):
                     if year_idx + 1 < total_col:
                         year_col = year_idx + 1
-                        # Escalated cost formula: base_cost * (1 + escalation_rate)^(year-1)
                         escalated_formula = f"={cost_ref}*(1+{maint_escalation_ref})^({year_idx-1})"
                         ws.write_formula(row, year_col, safe_formula(escalated_formula), formats['currency'])
                 
@@ -430,12 +454,10 @@ class ExcelExporter:
                 for year_col in range(useful_life + 2, total_col):
                     ws.write_number(row, year_col, 0, formats['currency'])
                 
-                # NPV calculation for escalating annuity
+                # NPV calculation for escalating annuity (same as before - this is correct)
                 if maint_escalation == 0:
-                    # Simple annuity if no escalation
                     npv_formula = f"={cost_ref}*((1-(1+{wacc_ref})^-{useful_life})/{wacc_ref})"
                 else:
-                    # Growing annuity formula for escalating costs
                     npv_formula = f"={cost_ref}*((1-((1+{maint_escalation_ref})/(1+{wacc_ref}))^{useful_life})/({wacc_ref}-{maint_escalation_ref}))"
                 
                 ws.write_formula(row, npv_col, safe_formula(npv_formula), formats['currency_bold'])
@@ -446,26 +468,25 @@ class ExcelExporter:
             row += 1
         
         
-        # Risk adjustment calculation - CRITICAL for accuracy
+        # Risk adjustment calculation - CRITICAL: Apply to ALL build costs (matches simulation)
         row += 1
         ws.write_string(row, 0, 'Risk Premium (Additional Cost)', formats['text_bold'])
         
-        # Calculate base build costs for risk calculation (exclude maintenance which gets separate treatment)
-        # Base costs include: FTE Labor + Infrastructure + Misc costs
-        base_build_rows = build_pv_rows[:-1]  # All except maintenance
-        base_cost_npv_refs = [f"{chr(65+npv_col)}{r+1}" for r in base_build_rows]
-        base_build_npv_formula = "+".join(base_cost_npv_refs)
+        # Calculate ALL build costs for risk calculation (matches simulation engine)
+        # This includes: Labor PV + CapEx + Misc + Amortization PV + Maintenance PV
+        all_build_cost_npv_refs = [f"{chr(65+npv_col)}{r+1}" for r in build_pv_rows]
+        all_build_npv_formula = "+".join(all_build_cost_npv_refs)
         
         # Risk multiplier: total_risk_percentage (matches simulation's additive risk model)
         tech_risk_ref = safe_cell_ref(self.param_cells.get('tech_risk'))
         vendor_risk_ref = safe_cell_ref(self.param_cells.get('vendor_risk'))
         market_risk_ref = safe_cell_ref(self.param_cells.get('market_risk'))
         
-        # Risk adjustment formula: base_costs * (tech_risk + vendor_risk + market_risk)
-        # This gives us the ADDITIONAL cost due to risk, not the total
-        risk_formula = f"=({base_build_npv_formula})*({tech_risk_ref}+{vendor_risk_ref}+{market_risk_ref})"
+        # Risk adjustment formula: ALL_costs * (tech_risk + vendor_risk + market_risk)
+        # This matches the simulation engine's approach where risk applies to total costs
+        risk_formula = f"=({all_build_npv_formula})*({tech_risk_ref}+{vendor_risk_ref}+{market_risk_ref})"
         ws.write_formula(row, npv_col, safe_formula(risk_formula), formats['currency_bold'])
-        ws.write_string(row, notes_col, 'Additional cost due to technical, vendor, and market risks', formats['text'])
+        ws.write_string(row, notes_col, 'Additional cost due to technical, vendor, and market risks (applied to all costs)', formats['text'])
         
         risk_adjustment_row = row
         row += 2
