@@ -22,11 +22,11 @@ pytest==8.3.3
 
 # Production server (with security features)
 gunicorn==21.2.0
-werkzeug>=3.0.0  # Security updates for Flask
+werkzeug>=3.0.0,<3.1  # Security updates, compatible with Dash 2.18.1
 
-# Security enhancements
-cryptography>=42.0.0  # For secure session handling if needed
-bleach>=6.1.0  # HTML sanitization (if user content displayed)
+# Security enhancements (optional - can be removed if causing issues)
+# cryptography>=42.0.0  # For secure session handling if needed
+# bleach>=6.1.0  # HTML sanitization (if user content displayed)
 
 # Optional: For better development experience
 jupyter==1.1.1
